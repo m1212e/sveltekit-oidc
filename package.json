@@ -1,0 +1,27 @@
+{
+	"name": "@m1212e/sveltekit-oidc",
+	"module": "index.ts",
+	"type": "module",
+	"repository": "https://github.com/m1212e/rumble",
+	"scripts": {
+		"format": "bun run lint",
+		"lint": "bunx biome check --write .",
+		"build": "bun build.ts",
+		"typecheck": "tsc --noEmit"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "1.9",
+		"@types/bun": "latest",
+		"lefthook": "^1.11",
+		"tsup": "^8.4"
+	},
+	"peerDependencies": {
+		"typescript": "^5",
+		"@sveltejs/kit": "^2"
+	},
+	"dependencies": {
+		"cryptr": "^6.3",
+		"openid-client": "^6.4",
+		"zod": "^3.24"
+	}
+}
