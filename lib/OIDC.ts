@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { dev } from "$app/environment";
-import { type RequestEvent, error, redirect } from "@sveltejs/kit";
+import { type Handle, type RequestEvent, error, redirect } from "@sveltejs/kit";
 import Cryptr from "cryptr";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import {
@@ -259,7 +259,7 @@ export async function makeOIDC({
 		const user = await validateTokens(tokens);
 		await userLoggedInSuccessfully?.(user);
 
-		return redirect(302, state.visitedUrl);
+		throw redirect(302, state.visitedUrl);
 	}
 
 	function setTokenCookiesOnRequest(
@@ -308,16 +308,16 @@ export async function makeOIDC({
 		req.cookies.delete(scopeCookieName, { path: "/" });
 		req.cookies.delete(tokenTypeCookieName, { path: "/" });
 
-		return redirect(303, "/");
+		throw redirect(303, "/");
 	}
 
-	async function handle(event: RequestEvent) {
+	const handle: Handle = async ({ event, resolve }) => {
 		if (event.url.pathname.startsWith(loginCallbackRoute)) {
-			return handleLoginRedirect(event);
+			handleLoginRedirect(event);
 		}
 
 		if (event.url.pathname.startsWith(logoutCallbackRoute)) {
-			return handleLogoutRedirect(event);
+			handleLogoutRedirect(event);
 		}
 
 		try {
@@ -332,14 +332,15 @@ export async function makeOIDC({
 			});
 
 			event.locals.user = user;
-			return user;
+			return resolve(event);
 		} catch (error) {
 			const refreshToken = event.cookies.get(refreshTokenCookieName);
 			if (refreshToken) {
 				try {
 					const newTokenSet = await refresh(refreshToken);
 					setTokenCookiesOnRequest(event, newTokenSet);
-					return await validateTokens(newTokenSet);
+					event.locals.user = await validateTokens(newTokenSet);
+					return resolve(event);
 				} catch (error) {
 					// console.warn('Error refreshing token', error);
 				}
@@ -352,7 +353,7 @@ export async function makeOIDC({
 					.map((r) => event.url.pathname.startsWith(r))
 					.some(Boolean)
 			) {
-				return;
+				return resolve(event);
 			}
 
 			const { encrypted_state, encrypted_verifier, redirect_uri } =
@@ -376,7 +377,7 @@ export async function makeOIDC({
 
 			throw redirect(302, redirect_uri);
 		}
-	}
+	};
 
 	return {
 		handle,
