@@ -1,3 +1,3 @@
 export { makeOIDC } from "./OIDC";
 export type { OIDCUser } from "./types";
-export * from "./app";
+export type * from "./app";
