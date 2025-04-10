@@ -36,6 +36,7 @@ export async function makeOIDC({
 	userLoggedInSuccessfully,
 	loginCallbackRoute = "/auth/login-callback",
 	logoutCallbackRoute = "/auth/logout-callback",
+	authenticatedRoutes,
 }: {
 	/**
 	 * If the server is running in development mode. Defaults to the sveltekit dev mode value.
@@ -88,6 +89,10 @@ export async function makeOIDC({
 	 * care of all the routing
 	 */
 	logoutCallbackRoute?: string;
+	/**
+	 * Routes that are protected and should trigger a login if the user is not authenticated
+	 */
+	authenticatedRoutes: string[];
 }) {
 	const execute = [];
 	if (development) {
@@ -306,19 +311,7 @@ export async function makeOIDC({
 		return redirect(303, "/");
 	}
 
-	async function handle({
-		event,
-		authenticatedRoutes,
-	}: {
-		/**
-		 * The request event
-		 */
-		event: RequestEvent;
-		/**
-		 * Routes that are protected and should trigger a login if the user is not authenticated
-		 */
-		authenticatedRoutes: string[];
-	}) {
+	async function handle(event: RequestEvent) {
 		if (event.url.pathname.startsWith(loginCallbackRoute)) {
 			return handleLoginRedirect(event);
 		}
