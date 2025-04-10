@@ -21,6 +21,9 @@ import {
 import { makeCookieNames } from "./cookie";
 import { type OIDCFlowState, type OIDCUser, isValidOIDCUser } from "./types";
 
+/**
+ * Create an OIDC instance
+ */
 export async function makeOIDC({
 	development = dev,
 	oidcAuthority,
@@ -43,16 +46,47 @@ export async function makeOIDC({
 	 */
 	oidcAuthority: string;
 	/**
-	 * The client ID of the OpenID Connect client
+	 * The client ID of the OpenID client
 	 */
 	oidcClientId: string;
+	/**
+	 * The client secret of the OpenID client
+	 */
 	oidcClientSecret?: string;
+	/**
+	 * A secret to encrypt sensitive info
+	 */
 	secret?: string;
+	/**
+	 * The scope of the requested token
+	 */
 	oidcScope?: string;
+	/**
+	 * The path to redirect to after logging out e.g. /logout-successful
+	 * Defaults to `/`
+	 */
 	logoutPath?: string;
+	/**
+	 * The prefix to use for the cookie names. Defaults to `auth_oidc_`
+	 */
 	cookiePrefix?: string;
+	/**
+	 * Callback for when a user logged in successfully. Useful for upserting users to a db
+	 */
 	userLoggedInSuccessfully?: (user: OIDCUser) => Promise<void> | void;
+	/**
+	 * The route used for login flow.
+	 * Defaults to `/auth/login-callback`
+	 * There does not actually have a route +page.svelte file there, the handlers takes
+	 * care of all the routing
+	 */
 	loginCallbackRoute?: string;
+	/**
+	 * The route used for logout flow.
+	 * Defaults to `/auth/logout-callback`
+	 * There does not actually have a route +page.svelte file there, the handlers takes
+	 * care of all the routing
+	 */
 	logoutCallbackRoute?: string;
 }) {
 	const execute = [];
