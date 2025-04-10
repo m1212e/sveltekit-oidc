@@ -18,7 +18,6 @@ import {
 	refreshTokenGrant,
 	tokenIntrospection,
 } from "openid-client";
-import { z } from "zod";
 import { makeCookieNames } from "./cookie";
 import { type OIDCFlowState, type OIDCUser, isValidOIDCUser } from "./types";
 
@@ -35,8 +34,17 @@ export async function makeOIDC({
 	loginCallbackRoute = "/auth/login-callback",
 	logoutCallbackRoute = "/auth/logout-callback",
 }: {
+	/**
+	 * If the server is running in development mode. Defaults to the sveltekit dev mode value.
+	 */
 	development?: boolean;
+	/**
+	 * The URL of the OpenID Connect server
+	 */
 	oidcAuthority: string;
+	/**
+	 * The client ID of the OpenID Connect client
+	 */
 	oidcClientId: string;
 	oidcClientSecret?: string;
 	secret?: string;
@@ -268,7 +276,13 @@ export async function makeOIDC({
 		event,
 		authenticatedRoutes,
 	}: {
+		/**
+		 * The request event
+		 */
 		event: RequestEvent;
+		/**
+		 * Routes that are protected and should trigger a login if the user is not authenticated
+		 */
 		authenticatedRoutes: string[];
 	}) {
 		if (event.url.pathname.startsWith(loginCallbackRoute)) {
