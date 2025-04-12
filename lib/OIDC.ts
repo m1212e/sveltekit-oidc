@@ -141,7 +141,7 @@ export async function makeOIDC({
 		const encrypted_state = cryptr.encrypt(serialized_state);
 
 		const parameters: Record<string, string> = {
-			redirect_uri: `${visitedUrl.origin}/${loginCallbackRoute}`,
+			redirect_uri: `${visitedUrl.origin}${loginCallbackRoute}`,
 			scope: oidcScope ?? "openid profile email",
 			code_challenge,
 			code_challenge_method: "S256",
@@ -232,7 +232,7 @@ export async function makeOIDC({
 
 	async function getLogoutUrl(visitedUrl: URL) {
 		return buildEndSessionUrl(config, {
-			post_logout_redirect_uri: `${visitedUrl.origin}/${logoutCallbackRoute}`,
+			post_logout_redirect_uri: `${visitedUrl.origin}${logoutCallbackRoute}`,
 		});
 	}
 
