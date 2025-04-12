@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { type Handle, type RequestEvent, error } from "@sveltejs/kit";
+import { type Handle, type RequestEvent, error, redirect } from "@sveltejs/kit";
 import Cryptr from "cryptr";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import {
@@ -259,12 +259,7 @@ export async function makeOIDC({
 		const user = await validateTokens(tokens);
 		await userLoggedInSuccessfully?.(user);
 
-		return new Response(null, {
-			status: 302,
-			headers: {
-				Location: state.visitedUrl,
-			},
-		});
+		redirect(302, state.visitedUrl);
 	}
 
 	function setTokenCookiesOnRequest(
@@ -313,21 +308,16 @@ export async function makeOIDC({
 		req.cookies.delete(scopeCookieName, { path: "/" });
 		req.cookies.delete(tokenTypeCookieName, { path: "/" });
 
-		return new Response(null, {
-			status: 302,
-			headers: {
-				Location: `${req.url.origin}/${logoutPath}`,
-			},
-		});
+		redirect(302, `${req.url.origin}/${logoutPath}`);
 	}
 
 	const handle: Handle = async ({ event, resolve }) => {
 		if (event.url.pathname.startsWith(loginCallbackRoute)) {
-			return handleLoginRedirect(event);
+			handleLoginRedirect(event);
 		}
 
 		if (event.url.pathname.startsWith(logoutCallbackRoute)) {
-			return handleLogoutRedirect(event);
+			handleLogoutRedirect(event);
 		}
 
 		try {
@@ -381,12 +371,7 @@ export async function makeOIDC({
 				httpOnly: true,
 			});
 
-			return new Response(null, {
-				status: 302,
-				headers: {
-					Location: redirect_uri.toString(),
-				},
-			});
+			redirect(302, redirect_uri);
 		}
 	};
 
