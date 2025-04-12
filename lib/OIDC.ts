@@ -314,21 +314,25 @@ export async function makeOIDC({
 	const handle: Handle = async ({ event, resolve }) => {
 		if (event.url.pathname.startsWith(loginCallbackRoute)) {
 			const redirect = await handleLoginRedirect(event);
+			event.setHeaders({
+				Location: redirect,
+			});
 			const res = await resolve(event);
 			return new Response(null, {
 				...res,
 				status: 302,
-				headers: { ...res.headers, Location: redirect },
 			});
 		}
 
 		if (event.url.pathname.startsWith(logoutCallbackRoute)) {
 			const redirect = await handleLogoutRedirect(event);
+			event.setHeaders({
+				Location: redirect,
+			});
 			const res = await resolve(event);
 			return new Response(null, {
 				...res,
 				status: 302,
-				headers: { ...res.headers, Location: redirect },
 			});
 		}
 
@@ -383,11 +387,13 @@ export async function makeOIDC({
 				httpOnly: true,
 			});
 
+			event.setHeaders({
+				Location: redirect_uri.toString(),
+			});
 			const res = await resolve(event);
 			return new Response(null, {
 				...res,
 				status: 302,
-				headers: { ...res.headers, Location: redirect_uri.toString() },
 			});
 		}
 	};
