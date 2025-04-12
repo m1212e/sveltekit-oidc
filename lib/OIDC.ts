@@ -1,5 +1,4 @@
 import { randomBytes } from "node:crypto";
-import { dev } from "$app/environment";
 import { type Handle, type RequestEvent, error, redirect } from "@sveltejs/kit";
 import Cryptr from "cryptr";
 import { createRemoteJWKSet, jwtVerify } from "jose";
@@ -25,7 +24,7 @@ import { type OIDCFlowState, type OIDCUser, isValidOIDCUser } from "./types";
  * Create an OIDC instance
  */
 export async function makeOIDC({
-	development = dev,
+	development = false,
 	oidcAuthority,
 	oidcClientId,
 	oidcClientSecret,
@@ -39,7 +38,8 @@ export async function makeOIDC({
 	authenticatedRoutes,
 }: {
 	/**
-	 * If the server is running in development mode. Defaults to the sveltekit dev mode value.
+	 * If the server is running in development mode.
+	 * @default false
 	 */
 	development?: boolean;
 	/**
