@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { type Handle, type RequestEvent, error, redirect } from "@sveltejs/kit";
+import { type Handle, type RequestEvent, error } from "@sveltejs/kit";
 import Cryptr from "cryptr";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import {
@@ -141,7 +141,7 @@ export async function makeOIDC({
 		const encrypted_state = cryptr.encrypt(serialized_state);
 
 		const parameters: Record<string, string> = {
-			redirect_uri: `${visitedUrl.origin}/auth/login-callback`,
+			redirect_uri: `${visitedUrl.origin}/${loginCallbackRoute}`,
 			scope: oidcScope ?? "openid profile email",
 			code_challenge,
 			code_challenge_method: "S256",
@@ -232,7 +232,7 @@ export async function makeOIDC({
 
 	async function getLogoutUrl(visitedUrl: URL) {
 		return buildEndSessionUrl(config, {
-			post_logout_redirect_uri: `${visitedUrl.origin}${logoutPath}`,
+			post_logout_redirect_uri: `${visitedUrl.origin}/${logoutCallbackRoute}`,
 		});
 	}
 
@@ -259,7 +259,12 @@ export async function makeOIDC({
 		const user = await validateTokens(tokens);
 		await userLoggedInSuccessfully?.(user);
 
-		redirect(302, state.visitedUrl);
+		return new Response(null, {
+			status: 302,
+			headers: {
+				Location: state.visitedUrl,
+			},
+		});
 	}
 
 	function setTokenCookiesOnRequest(
@@ -308,16 +313,21 @@ export async function makeOIDC({
 		req.cookies.delete(scopeCookieName, { path: "/" });
 		req.cookies.delete(tokenTypeCookieName, { path: "/" });
 
-		redirect(303, "/");
+		return new Response(null, {
+			status: 302,
+			headers: {
+				Location: `${req.url.origin}/${logoutPath}`,
+			},
+		});
 	}
 
 	const handle: Handle = async ({ event, resolve }) => {
 		if (event.url.pathname.startsWith(loginCallbackRoute)) {
-			handleLoginRedirect(event);
+			return handleLoginRedirect(event);
 		}
 
 		if (event.url.pathname.startsWith(logoutCallbackRoute)) {
-			handleLogoutRedirect(event);
+			return handleLogoutRedirect(event);
 		}
 
 		try {
@@ -371,7 +381,12 @@ export async function makeOIDC({
 				httpOnly: true,
 			});
 
-			redirect(302, redirect_uri);
+			return new Response(null, {
+				status: 302,
+				headers: {
+					Location: redirect_uri.toString(),
+				},
+			});
 		}
 	};
 
