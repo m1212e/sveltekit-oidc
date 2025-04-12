@@ -259,7 +259,7 @@ export async function makeOIDC({
 		const user = await validateTokens(tokens);
 		await userLoggedInSuccessfully?.(user);
 
-		return redirect(302, state.visitedUrl);
+		redirect(302, state.visitedUrl);
 	}
 
 	function setTokenCookiesOnRequest(
@@ -308,16 +308,16 @@ export async function makeOIDC({
 		req.cookies.delete(scopeCookieName, { path: "/" });
 		req.cookies.delete(tokenTypeCookieName, { path: "/" });
 
-		return redirect(303, "/");
+		redirect(303, "/");
 	}
 
 	const handle: Handle = async ({ event, resolve }) => {
 		if (event.url.pathname.startsWith(loginCallbackRoute)) {
-			return handleLoginRedirect(event);
+			handleLoginRedirect(event);
 		}
 
 		if (event.url.pathname.startsWith(logoutCallbackRoute)) {
-			return handleLogoutRedirect(event);
+			handleLogoutRedirect(event);
 		}
 
 		try {
@@ -371,7 +371,7 @@ export async function makeOIDC({
 				httpOnly: true,
 			});
 
-			return redirect(302, redirect_uri);
+			redirect(302, redirect_uri);
 		}
 	};
 
