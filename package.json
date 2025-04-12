@@ -16,11 +16,12 @@
 		"@biomejs/biome": "1.9",
 		"@types/bun": "latest",
 		"lefthook": "^1.11",
+		"@sveltejs/kit": "^2.0.0",
 		"tsup": "^8.4"
 	},
 	"peerDependencies": {
 		"typescript": "^5",
-		"@sveltejs/kit": "^2.20.5"
+		"@sveltejs/kit": "^2.0.0"
 	},
 	"dependencies": {
 		"cryptr": "^6.3",
