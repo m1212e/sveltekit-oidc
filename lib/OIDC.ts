@@ -318,7 +318,7 @@ export async function makeOIDC({
 				Location: redirect,
 			});
 			const res = await resolve(event);
-			return new Response(null, {
+			return new Response(res.body, {
 				...res,
 				status: 302,
 			});
@@ -330,7 +330,7 @@ export async function makeOIDC({
 				Location: redirect,
 			});
 			const res = await resolve(event);
-			return new Response(null, {
+			return new Response(res.body, {
 				...res,
 				status: 302,
 			});
@@ -391,7 +391,7 @@ export async function makeOIDC({
 				Location: redirect_uri.toString(),
 			});
 			const res = await resolve(event);
-			return new Response(null, {
+			return new Response(res.body, {
 				...res,
 				status: 302,
 			});
