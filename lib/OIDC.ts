@@ -259,7 +259,7 @@ export async function makeOIDC({
 		const user = await validateTokens(tokens);
 		await userLoggedInSuccessfully?.(user);
 
-		throw redirect(302, state.visitedUrl);
+		return redirect(302, state.visitedUrl);
 	}
 
 	function setTokenCookiesOnRequest(
@@ -308,16 +308,16 @@ export async function makeOIDC({
 		req.cookies.delete(scopeCookieName, { path: "/" });
 		req.cookies.delete(tokenTypeCookieName, { path: "/" });
 
-		throw redirect(303, "/");
+		return redirect(303, "/");
 	}
 
 	const handle: Handle = async ({ event, resolve }) => {
 		if (event.url.pathname.startsWith(loginCallbackRoute)) {
-			handleLoginRedirect(event);
+			return handleLoginRedirect(event);
 		}
 
 		if (event.url.pathname.startsWith(logoutCallbackRoute)) {
-			handleLogoutRedirect(event);
+			return handleLogoutRedirect(event);
 		}
 
 		try {
@@ -348,11 +348,7 @@ export async function makeOIDC({
 
 			// if neither validation nor refresh worked, start login flow
 			// but only if a route is protected
-			if (
-				!authenticatedRoutes
-					.map((r) => event.url.pathname.startsWith(r))
-					.some(Boolean)
-			) {
+			if (!authenticatedRoutes.some((r) => event.url.pathname.startsWith(r))) {
 				return resolve(event);
 			}
 
@@ -375,7 +371,7 @@ export async function makeOIDC({
 				httpOnly: true,
 			});
 
-			throw redirect(302, redirect_uri);
+			return redirect(302, redirect_uri);
 		}
 	};
 
