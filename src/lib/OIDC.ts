@@ -18,7 +18,13 @@ import {
 	tokenIntrospection
 } from 'openid-client';
 import { makeCookieNames } from './cookie.js';
-import { type OIDCFlowState, type OIDCUser, isValidOIDCUser } from './types.js';
+import {
+	type AccessTokenResponse,
+	type IdTokenResponse,
+	type OIDCFlowState,
+	type OIDCUser,
+	isValidOIDCUser
+} from './types.js';
 
 /**
  * Create an OIDC instance
@@ -175,17 +181,11 @@ export async function makeOIDC({
 	async function validateTokens({
 		access_token,
 		id_token
-	}: Pick<TokenEndpointResponse, 'access_token' | 'id_token'>): Promise<OIDCUser> {
-		let accessTokenValue:
-			| Awaited<ReturnType<typeof jwtVerify>>['payload']
-			| Awaited<ReturnType<typeof tokenIntrospection>>
-			| undefined = undefined;
-
-		let idTokenValue:
-			| Awaited<ReturnType<typeof jwtVerify>>['payload']
-			| Awaited<ReturnType<typeof tokenIntrospection>>
-			| Awaited<ReturnType<typeof fetchUserInfo>>
-			| undefined = undefined;
+	}: Pick<TokenEndpointResponse, 'access_token' | 'id_token'>): Promise<
+		OIDCUser & IdTokenResponse & AccessTokenResponse
+	> {
+		let accessTokenValue: AccessTokenResponse = undefined;
+		let idTokenValue: IdTokenResponse = undefined;
 
 		try {
 			if (!jwks) throw new Error('No jwks available');
@@ -230,18 +230,20 @@ export async function makeOIDC({
 			idTokenValue = idt;
 		}
 
-		if (accessTokenValue?.sub !== idTokenValue?.sub) {
+		if (accessTokenValue?.sub && idTokenValue?.sub && accessTokenValue?.sub !== idTokenValue?.sub) {
 			throw new Error('Subject in access token and id token do not match');
 		}
 
-		// some basic fields which we want to be present
-		// if the id token is configured in a way that it does not contain these fields
-		// we instead want to use the userinfo endpoint
-		if (!isValidOIDCUser(idTokenValue.payload)) {
+		const combined: AccessTokenResponse & IdTokenResponse = {
+			...(accessTokenValue || {}),
+			...(idTokenValue || {})
+		};
+
+		if (!isValidOIDCUser(combined)) {
 			throw new Error('Not all fields in id token are present');
 		}
 
-		return idTokenValue.payload;
+		return combined;
 	}
 
 	async function refresh(refresh_token: string) {

@@ -1,8 +1,10 @@
 import { z } from 'zod';
+import type { jwtVerify } from 'jose';
+import type { fetchUserInfo, tokenIntrospection } from 'openid-client';
 
 export const OIDCUserSchema = z.object({
 	sub: z.string(),
-	email: z.string(),
+	email: z.string().email(),
 	preferred_username: z.string(),
 	family_name: z.string(),
 	given_name: z.string(),
@@ -23,3 +25,14 @@ export type OIDCFlowState = z.infer<typeof OIDCFlowStateSchema>;
 export function isValidOIDCFlowState(state: unknown): state is OIDCFlowState {
 	return OIDCFlowStateSchema.safeParse(state).success;
 }
+
+export type AccessTokenResponse =
+	| Awaited<ReturnType<typeof jwtVerify>>['payload']
+	| Awaited<ReturnType<typeof tokenIntrospection>>
+	| undefined;
+
+export type IdTokenResponse =
+	| Awaited<ReturnType<typeof jwtVerify>>['payload']
+	| Awaited<ReturnType<typeof tokenIntrospection>>
+	| Awaited<ReturnType<typeof fetchUserInfo>>
+	| undefined;
