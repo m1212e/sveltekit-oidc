@@ -23,6 +23,7 @@ import {
 	type IdTokenResponse,
 	type OIDCFlowState,
 	type OIDCUser,
+	type ValidationResponse,
 	isValidOIDCUser
 } from './types.js';
 
@@ -181,9 +182,7 @@ export async function makeOIDC({
 	async function validateTokens({
 		access_token,
 		id_token
-	}: Pick<TokenEndpointResponse, 'access_token' | 'id_token'>): Promise<
-		OIDCUser & IdTokenResponse & AccessTokenResponse
-	> {
+	}: Pick<TokenEndpointResponse, 'access_token' | 'id_token'>): Promise<ValidationResponse> {
 		let accessTokenValue: AccessTokenResponse = undefined;
 		let idTokenValue: IdTokenResponse = undefined;
 
@@ -243,7 +242,11 @@ export async function makeOIDC({
 			throw new Error('Not all fields in id token are present');
 		}
 
-		return combined;
+		return {
+			user: combined,
+			accessToken: accessTokenValue,
+			idToken: idTokenValue
+		};
 	}
 
 	async function refresh(refresh_token: string) {

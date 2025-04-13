@@ -1,9 +1,6 @@
 import { z } from 'zod';
 import type { JWTPayload } from 'jose';
-import type {
-	IntrospectionResponse,
-	UserInfoResponse
-} from 'openid-client';
+import type { IntrospectionResponse, UserInfoResponse } from 'openid-client';
 
 export const OIDCUserSchema = z.object({
 	sub: z.string(),
@@ -31,3 +28,8 @@ export function isValidOIDCFlowState(state: unknown): state is OIDCFlowState {
 
 export type AccessTokenResponse = JWTPayload | IntrospectionResponse | undefined;
 export type IdTokenResponse = JWTPayload | IntrospectionResponse | UserInfoResponse | undefined;
+export type ValidationResponse = {
+	user: OIDCUser;
+	accessToken: AccessTokenResponse;
+	idToken: IdTokenResponse;
+};
