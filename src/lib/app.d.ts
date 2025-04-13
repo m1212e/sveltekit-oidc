@@ -1,9 +1,9 @@
-import type { OIDCUser } from './types.js';
+import type { OIDCUser, IdTokenResponse, AccessTokenResponse } from './types.ts';
 
 declare global {
 	namespace App {
 		interface Locals {
-			user?: OIDCUser;
+			user?: OIDCUser & IdTokenResponse & AccessTokenResponse;
 		}
 	}
 }

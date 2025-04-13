@@ -1,6 +1,9 @@
 import { z } from 'zod';
-import type { jwtVerify } from 'jose';
-import type { fetchUserInfo, tokenIntrospection } from 'openid-client';
+import type { JWTPayload } from 'jose';
+import type {
+	IntrospectionResponse,
+	UserInfoResponse
+} from 'openid-client';
 
 export const OIDCUserSchema = z.object({
 	sub: z.string(),
@@ -26,13 +29,5 @@ export function isValidOIDCFlowState(state: unknown): state is OIDCFlowState {
 	return OIDCFlowStateSchema.safeParse(state).success;
 }
 
-export type AccessTokenResponse =
-	| Awaited<ReturnType<typeof jwtVerify>>['payload']
-	| Awaited<ReturnType<typeof tokenIntrospection>>
-	| undefined;
-
-export type IdTokenResponse =
-	| Awaited<ReturnType<typeof jwtVerify>>['payload']
-	| Awaited<ReturnType<typeof tokenIntrospection>>
-	| Awaited<ReturnType<typeof fetchUserInfo>>
-	| undefined;
+export type AccessTokenResponse = JWTPayload | IntrospectionResponse | undefined;
+export type IdTokenResponse = JWTPayload | IntrospectionResponse | UserInfoResponse | undefined;
