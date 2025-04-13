@@ -1,5 +1,5 @@
 {
-	"name": "myapp",
+	"name": "@m1212e/sveltekit-oidc",
 	"version": "0.0.1",
 	"scripts": {
 		"dev": "vite dev",
