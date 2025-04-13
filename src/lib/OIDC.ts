@@ -176,49 +176,72 @@ export async function makeOIDC({
 		access_token,
 		id_token
 	}: Pick<TokenEndpointResponse, 'access_token' | 'id_token'>): Promise<OIDCUser> {
+		let accessTokenValue:
+			| Awaited<ReturnType<typeof jwtVerify>>['payload']
+			| Awaited<ReturnType<typeof tokenIntrospection>>
+			| undefined = undefined;
+
+		let idTokenValue:
+			| Awaited<ReturnType<typeof jwtVerify>>['payload']
+			| Awaited<ReturnType<typeof tokenIntrospection>>
+			| Awaited<ReturnType<typeof fetchUserInfo>>
+			| undefined = undefined;
+
 		try {
 			if (!jwks) throw new Error('No jwks available');
-			const keyset = await jwks();
-			if (!keyset) throw new Error('No jwks available');
-			if (!id_token) throw new Error('No id_token available');
 
-			const [accessTokenValue, idTokenValue] = await Promise.all([
-				jwtVerify(access_token, keyset, {
+			const [at, idt] = await Promise.all([
+				jwtVerify(access_token, jwks, {
 					issuer: config.serverMetadata().issuer,
 					audience: oidcClientId
 				}),
-				jwtVerify(id_token, keyset, {
-					issuer: config.serverMetadata().issuer,
-					audience: oidcClientId
-				})
+				id_token
+					? jwtVerify(id_token, jwks, {
+							issuer: config.serverMetadata().issuer,
+							audience: oidcClientId
+						})
+					: Promise.resolve(undefined)
 			]);
 
-			if (accessTokenValue?.payload?.sub !== idTokenValue?.payload?.sub) {
-				throw new Error('Subject in access token and id token do not match');
-			}
-
-			// some basic fields which we want to be present
-			// if the id token is configured in a way that it does not contain these fields
-			// we instead want to use the userinfo endpoint
-			if (!isValidOIDCUser(idTokenValue.payload)) {
-				throw new Error('Not all fields in id token are present');
-			}
-
-			return idTokenValue.payload;
+			accessTokenValue = at.payload;
+			idTokenValue = idt.payload;
 		} catch (error: any) {
 			console.warn(
 				'Failed to verify tokens locally, falling back to less performant info fetch:',
 				error.message
 			);
 
-			const remoteUserInfo = await tokenIntrospection(config, access_token);
+			const atTokenIntrospection = await tokenIntrospection(config, access_token);
+			const [at, idt] = await Promise.all([
+				atTokenIntrospection,
+				(async () => {
+					try {
+						if (!id_token) throw new Error('No id_token available');
+						return tokenIntrospection(config, id_token);
+					} catch (error) {
+						const accessT = await atTokenIntrospection;
+						if (!accessT?.sub) throw new Error('No access token available');
+						return fetchUserInfoFromIssuer(access_token, accessT.sub);
+					}
+				})()
+			]);
 
-			if (!isValidOIDCUser(remoteUserInfo)) {
-				throw new Error('Not all fields in remoteUserInfo token are present');
-			}
-
-			return remoteUserInfo;
+			accessTokenValue = at;
+			idTokenValue = idt;
 		}
+
+		if (accessTokenValue?.sub !== idTokenValue?.sub) {
+			throw new Error('Subject in access token and id token do not match');
+		}
+
+		// some basic fields which we want to be present
+		// if the id token is configured in a way that it does not contain these fields
+		// we instead want to use the userinfo endpoint
+		if (!isValidOIDCUser(idTokenValue.payload)) {
+			throw new Error('Not all fields in id token are present');
+		}
+
+		return idTokenValue.payload;
 	}
 
 	async function refresh(refresh_token: string) {
