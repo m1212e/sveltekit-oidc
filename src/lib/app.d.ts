@@ -1,9 +1,9 @@
-import type { OIDCUser, IdTokenResponse, AccessTokenResponse } from './types.ts';
+import type { ValidationResponse } from './types.ts';
 
 declare global {
 	namespace App {
 		interface Locals {
-			user?: OIDCUser & IdTokenResponse & AccessTokenResponse;
+			oidc?: ValidationResponse;
 		}
 	}
 }

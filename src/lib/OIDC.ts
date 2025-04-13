@@ -342,12 +342,11 @@ export async function makeOIDC({
 			if (!accessToken) {
 				throw new Error('No access token found');
 			}
-			const user = await validateTokens({
+			event.locals.oidc = await validateTokens({
 				access_token: accessToken,
 				id_token: idToken
 			});
 
-			event.locals.user = user;
 			return resolve(event);
 		} catch (error) {
 			const refreshToken = event.cookies.get(refreshTokenCookieName);
@@ -355,7 +354,7 @@ export async function makeOIDC({
 				try {
 					const newTokenSet = await refresh(refreshToken);
 					setTokenCookiesOnRequest(event, newTokenSet);
-					event.locals.user = await validateTokens(newTokenSet);
+					event.locals.oidc = await validateTokens(newTokenSet);
 					return resolve(event);
 				} catch (error) {
 					// console.warn('Error refreshing token', error);
