@@ -16,7 +16,7 @@ const OIDCUserSchema = Type.Object({
 });
 export type OIDCUser = Static<typeof OIDCUserSchema>;
 const CompiledOIDCUser = TypeCompiler.Compile(OIDCUserSchema);
-export const parseOIDCUser = CompiledOIDCUser.Decode;
+export const parseOIDCUser = (value: unknown) => CompiledOIDCUser.Decode(value);
 
 const OIDCFlowStateSchema = Type.Object({
 	visitedUrl: Type.String(),
@@ -24,7 +24,7 @@ const OIDCFlowStateSchema = Type.Object({
 });
 export type OIDCFlowState = Static<typeof OIDCFlowStateSchema>;
 const CompiledOIDCFlowState = TypeCompiler.Compile(OIDCFlowStateSchema);
-export const parseOIDCFlowState = CompiledOIDCFlowState.Decode;
+export const parseOIDCFlowState = (value: unknown) => CompiledOIDCFlowState.Decode(value);
 
 export type AccessTokenResponse = JWTPayload | IntrospectionResponse | undefined;
 export type IdTokenResponse = JWTPayload | IntrospectionResponse | UserInfoResponse | undefined;
