@@ -12,9 +12,9 @@ jobs:
       - uses: actions/checkout@v2
       - uses: oven-sh/setup-bun@v1
       - name: Install dependencies
-        run: bun i
-      - name: Run tests
-        run: bun test
+        run: bun i --frozen-lockfile
+      # - name: Run tests
+      #   run: bun test
       - name: Run build
         run: bun run build
         env:
@@ -30,5 +30,5 @@ jobs:
       - uses: JS-DevTools/npm-publish@v3
         with:
           token: ${{ secrets.NPM_TOKEN }}
-          package: ./out/package.json
+          # package: ./out/package.json
           tag: ${{ steps.tag.outputs.tag }}

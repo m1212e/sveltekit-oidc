@@ -1,7 +1,9 @@
 # svletekit-oidc
+
 Implementing OIDC with Sveltekit never has been easier:
 
 In your `hooks.server.ts`
+
 ```ts
 import { sequence } from '@sveltejs/kit/hooks';
 
@@ -14,7 +16,6 @@ export const OIDC = await makeOIDC({
 		upsertUserAtDatabase();
 	}
 });
-
 
 export const handle: Handle = sequence(OIDC.handle, otherHandler);
 ```

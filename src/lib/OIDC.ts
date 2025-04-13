@@ -1,7 +1,7 @@
-import { randomBytes } from "node:crypto";
-import { type Handle, type RequestEvent, error } from "@sveltejs/kit";
-import Cryptr from "cryptr";
-import { createRemoteJWKSet, jwtVerify } from "jose";
+import { randomBytes } from 'node:crypto';
+import { type Handle, type RequestEvent, error } from '@sveltejs/kit';
+import Cryptr from 'cryptr';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
 import {
 	type TokenEndpointResponse,
 	type TokenEndpointResponseHelpers,
@@ -15,10 +15,10 @@ import {
 	randomPKCECodeVerifier,
 	randomState,
 	refreshTokenGrant,
-	tokenIntrospection,
-} from "openid-client";
-import { makeCookieNames } from "./cookie";
-import { type OIDCFlowState, type OIDCUser, isValidOIDCUser } from "./types";
+	tokenIntrospection
+} from 'openid-client';
+import { makeCookieNames } from './cookie.js';
+import { type OIDCFlowState, type OIDCUser, isValidOIDCUser } from './types.js';
 
 /**
  * Create an OIDC instance
@@ -30,12 +30,12 @@ export async function makeOIDC({
 	oidcClientSecret,
 	secret,
 	oidcScope,
-	logoutPath = "/",
+	logoutPath = '/',
 	cookiePrefix,
 	userLoggedInSuccessfully,
-	loginCallbackRoute = "/auth/login-callback",
-	logoutCallbackRoute = "/auth/logout-callback",
-	authenticatedRoutes,
+	loginCallbackRoute = '/auth/login-callback',
+	logoutCallbackRoute = '/auth/logout-callback',
+	authenticatedRoutes
 }: {
 	/**
 	 * If the server is running in development mode.
@@ -103,20 +103,18 @@ export async function makeOIDC({
 		oidcClientId,
 		{
 			client_secret: oidcClientSecret,
-			token_endpoint_auth_method: oidcClientSecret ? undefined : "none",
+			token_endpoint_auth_method: oidcClientSecret ? undefined : 'none'
 		},
 		undefined,
 		{
-			execute,
-		},
+			execute
+		}
 	);
 
 	const jwks_uri = config.serverMetadata().jwks_uri;
-	const jwks = jwks_uri
-		? await createRemoteJWKSet(new URL(jwks_uri))
-		: undefined;
+	const jwks = jwks_uri ? await createRemoteJWKSet(new URL(jwks_uri)) : undefined;
 
-	const cryptr = new Cryptr(secret ?? randomBytes(100).toString("hex"));
+	const cryptr = new Cryptr(secret ?? randomBytes(100).toString('hex'));
 
 	const {
 		accessTokenCookieName,
@@ -126,7 +124,7 @@ export async function makeOIDC({
 		oidcStateCookieName,
 		refreshTokenCookieName,
 		scopeCookieName,
-		tokenTypeCookieName,
+		tokenTypeCookieName
 	} = makeCookieNames(cookiePrefix);
 
 	async function startSignin(visitedUrl: URL) {
@@ -135,17 +133,17 @@ export async function makeOIDC({
 		const code_challenge = await calculatePKCECodeChallenge(code_verifier);
 		const state: OIDCFlowState = {
 			visitedUrl: visitedUrl.toString(),
-			random: randomState(),
+			random: randomState()
 		};
 		const serialized_state = JSON.stringify(state);
 		const encrypted_state = cryptr.encrypt(serialized_state);
 
 		const parameters: Record<string, string> = {
 			redirect_uri: `${visitedUrl.origin}${loginCallbackRoute}`,
-			scope: oidcScope ?? "openid profile email",
+			scope: oidcScope ?? 'openid profile email',
 			code_challenge,
-			code_challenge_method: "S256",
-			state: serialized_state,
+			code_challenge_method: 'S256',
+			state: serialized_state
 		};
 
 		const redirect_uri = buildAuthorizationUrl(config, parameters);
@@ -153,73 +151,70 @@ export async function makeOIDC({
 		return {
 			encrypted_verifier,
 			redirect_uri,
-			encrypted_state,
+			encrypted_state
 		};
 	}
 
 	async function resolveSignin(
 		visitedUrl: URL,
 		encrypted_verifier: string,
-		encrypted_state: string,
+		encrypted_state: string
 	) {
 		const verifier = cryptr.decrypt(encrypted_verifier);
 		const state = JSON.parse(cryptr.decrypt(encrypted_state)) as OIDCFlowState;
 		const tokens = await authorizationCodeGrant(config, visitedUrl, {
 			pkceCodeVerifier: verifier,
-			expectedState: JSON.stringify(state),
+			expectedState: JSON.stringify(state)
 		});
 		(state as any).random = undefined;
-		const strippedState: Omit<OIDCFlowState, "random"> = { ...state };
+		const strippedState: Omit<OIDCFlowState, 'random'> = { ...state };
 
 		return { tokens, state: strippedState };
 	}
 
 	async function validateTokens({
 		access_token,
-		id_token,
-	}: Pick<
-		TokenEndpointResponse,
-		"access_token" | "id_token"
-	>): Promise<OIDCUser> {
+		id_token
+	}: Pick<TokenEndpointResponse, 'access_token' | 'id_token'>): Promise<OIDCUser> {
 		try {
-			if (!jwks) throw new Error("No jwks available");
+			if (!jwks) throw new Error('No jwks available');
 			const keyset = await jwks();
-			if (!keyset) throw new Error("No jwks available");
-			if (!id_token) throw new Error("No id_token available");
+			if (!keyset) throw new Error('No jwks available');
+			if (!id_token) throw new Error('No id_token available');
 
 			const [accessTokenValue, idTokenValue] = await Promise.all([
 				jwtVerify(access_token, keyset, {
 					issuer: config.serverMetadata().issuer,
-					audience: oidcClientId,
+					audience: oidcClientId
 				}),
 				jwtVerify(id_token, keyset, {
 					issuer: config.serverMetadata().issuer,
-					audience: oidcClientId,
-				}),
+					audience: oidcClientId
+				})
 			]);
 
 			if (accessTokenValue?.payload?.sub !== idTokenValue?.payload?.sub) {
-				throw new Error("Subject in access token and id token do not match");
+				throw new Error('Subject in access token and id token do not match');
 			}
 
 			// some basic fields which we want to be present
 			// if the id token is configured in a way that it does not contain these fields
 			// we instead want to use the userinfo endpoint
 			if (!isValidOIDCUser(idTokenValue.payload)) {
-				throw new Error("Not all fields in id token are present");
+				throw new Error('Not all fields in id token are present');
 			}
 
 			return idTokenValue.payload;
 		} catch (error: any) {
 			console.warn(
-				"Failed to verify tokens locally, falling back to less performant info fetch:",
-				error.message,
+				'Failed to verify tokens locally, falling back to less performant info fetch:',
+				error.message
 			);
 
 			const remoteUserInfo = await tokenIntrospection(config, access_token);
 
 			if (!isValidOIDCUser(remoteUserInfo)) {
-				throw new Error("Not all fields in remoteUserInfo token are present");
+				throw new Error('Not all fields in remoteUserInfo token are present');
 			}
 
 			return remoteUserInfo;
@@ -232,29 +227,26 @@ export async function makeOIDC({
 
 	async function getLogoutUrl(visitedUrl: URL) {
 		return buildEndSessionUrl(config, {
-			post_logout_redirect_uri: `${visitedUrl.origin}${logoutCallbackRoute}`,
+			post_logout_redirect_uri: `${visitedUrl.origin}${logoutCallbackRoute}`
 		});
 	}
 
-	async function fetchUserInfoFromIssuer(
-		access_token: string,
-		expectedSubject: string,
-	) {
+	async function fetchUserInfoFromIssuer(access_token: string, expectedSubject: string) {
 		return fetchUserInfo(config, access_token, expectedSubject);
 	}
 
 	async function handleLoginRedirect(req: RequestEvent) {
 		const verifier = req.cookies.get(codeVerifierCookieName);
-		if (!verifier) error(400, "No code verifier cookie found.");
+		if (!verifier) error(400, 'No code verifier cookie found.');
 		const oidcState = req.cookies.get(oidcStateCookieName);
-		if (!oidcState) error(400, "No oidc state cookie found.");
+		if (!oidcState) error(400, 'No oidc state cookie found.');
 
 		const { state, tokens } = await resolveSignin(req.url, verifier, oidcState);
 
 		setTokenCookiesOnRequest(req, tokens);
 
-		req.cookies.delete(codeVerifierCookieName, { path: "/" });
-		req.cookies.delete(oidcStateCookieName, { path: "/" });
+		req.cookies.delete(codeVerifierCookieName, { path: '/' });
+		req.cookies.delete(oidcStateCookieName, { path: '/' });
 
 		const user = await validateTokens(tokens);
 		await userLoggedInSuccessfully?.(user);
@@ -264,24 +256,20 @@ export async function makeOIDC({
 
 	function setTokenCookiesOnRequest(
 		req: RequestEvent,
-		tokens: TokenEndpointResponse & TokenEndpointResponseHelpers,
+		tokens: TokenEndpointResponse & TokenEndpointResponseHelpers
 	) {
 		const cookieOptions: Parameters<typeof req.cookies.set>[2] = {
-			path: "/",
+			path: '/',
 			httpOnly: true,
 			// sameSite: 'lax',
-			sameSite: "strict",
+			sameSite: 'strict',
 			secure: true,
-			maxAge: tokens.expires_in ? tokens.expires_in * 1000 : undefined,
+			maxAge: tokens.expires_in ? tokens.expires_in * 1000 : undefined
 		};
 
 		req.cookies.set(accessTokenCookieName, tokens.access_token, cookieOptions);
 		if (tokens.refresh_token) {
-			req.cookies.set(
-				refreshTokenCookieName,
-				tokens.refresh_token,
-				cookieOptions,
-			);
+			req.cookies.set(refreshTokenCookieName, tokens.refresh_token, cookieOptions);
 		}
 		if (tokens.id_token) {
 			req.cookies.set(idTokenCookieName, tokens.id_token, cookieOptions);
@@ -299,14 +287,14 @@ export async function makeOIDC({
 	}
 
 	async function handleLogoutRedirect(req: RequestEvent) {
-		req.cookies.delete(codeVerifierCookieName, { path: "/" });
-		req.cookies.delete(oidcStateCookieName, { path: "/" });
-		req.cookies.delete(accessTokenCookieName, { path: "/" });
-		req.cookies.delete(refreshTokenCookieName, { path: "/" });
-		req.cookies.delete(idTokenCookieName, { path: "/" });
-		req.cookies.delete(expiresInCookieName, { path: "/" });
-		req.cookies.delete(scopeCookieName, { path: "/" });
-		req.cookies.delete(tokenTypeCookieName, { path: "/" });
+		req.cookies.delete(codeVerifierCookieName, { path: '/' });
+		req.cookies.delete(oidcStateCookieName, { path: '/' });
+		req.cookies.delete(accessTokenCookieName, { path: '/' });
+		req.cookies.delete(refreshTokenCookieName, { path: '/' });
+		req.cookies.delete(idTokenCookieName, { path: '/' });
+		req.cookies.delete(expiresInCookieName, { path: '/' });
+		req.cookies.delete(scopeCookieName, { path: '/' });
+		req.cookies.delete(tokenTypeCookieName, { path: '/' });
 
 		return `${req.url.origin}/${logoutPath}`;
 	}
@@ -320,15 +308,15 @@ export async function makeOIDC({
 				status: 302,
 				headers: {
 					...res.headers,
-					Location: redirect,
-				},
+					Location: redirect
+				}
 			});
 		}
 
 		if (event.url.pathname.startsWith(logoutCallbackRoute)) {
 			const redirect = await handleLogoutRedirect(event);
 			event.setHeaders({
-				Location: redirect,
+				Location: redirect
 			});
 			const res = await resolve(event);
 			return new Response(res.body, {
@@ -336,8 +324,8 @@ export async function makeOIDC({
 				status: 302,
 				headers: {
 					...res.headers,
-					Location: redirect,
-				},
+					Location: redirect
+				}
 			});
 		}
 
@@ -345,11 +333,11 @@ export async function makeOIDC({
 			const accessToken = event.cookies.get(accessTokenCookieName);
 			const idToken = event.cookies.get(idTokenCookieName);
 			if (!accessToken) {
-				throw new Error("No access token found");
+				throw new Error('No access token found');
 			}
 			const user = await validateTokens({
 				access_token: accessToken,
-				id_token: idToken,
+				id_token: idToken
 			});
 
 			event.locals.user = user;
@@ -373,23 +361,22 @@ export async function makeOIDC({
 				return resolve(event);
 			}
 
-			const { encrypted_state, encrypted_verifier, redirect_uri } =
-				await startSignin(event.url);
+			const { encrypted_state, encrypted_verifier, redirect_uri } = await startSignin(event.url);
 
 			event.cookies.set(codeVerifierCookieName, encrypted_verifier, {
-				sameSite: "lax",
+				sameSite: 'lax',
 				maxAge: 60 * 5,
-				path: "/",
+				path: '/',
 				secure: true,
-				httpOnly: true,
+				httpOnly: true
 			});
 
 			event.cookies.set(oidcStateCookieName, encrypted_state, {
-				sameSite: "lax",
+				sameSite: 'lax',
 				maxAge: 60 * 5,
-				path: "/",
+				path: '/',
 				secure: true,
-				httpOnly: true,
+				httpOnly: true
 			});
 
 			const res = await resolve(event);
@@ -398,8 +385,8 @@ export async function makeOIDC({
 				status: 302,
 				headers: {
 					...res.headers,
-					Location: redirect_uri.toString(),
-				},
+					Location: redirect_uri.toString()
+				}
 			});
 		}
 	};
@@ -407,6 +394,6 @@ export async function makeOIDC({
 	return {
 		handle,
 		fetchUserInfoFromIssuer,
-		getLogoutUrl,
+		getLogoutUrl
 	};
 }

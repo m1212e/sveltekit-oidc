@@ -1,5 +1,4 @@
-import type { applyAuth } from "$api/services/OIDC";
-import type { OIDCUser } from "./types";
+import type { OIDCUser } from './types.ts';
 
 declare global {
 	namespace App {

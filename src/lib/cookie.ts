@@ -1,5 +1,5 @@
 export function makeCookieNames(prefix?: string) {
-	const cookiePrefix = prefix ?? "auth_oidc_";
+	const cookiePrefix = prefix ?? 'auth_oidc_';
 	const codeVerifierCookieName = `${cookiePrefix}code_verifier`;
 	const oidcStateCookieName = `${cookiePrefix}state`;
 	const accessTokenCookieName = `${cookiePrefix}access_token`;
@@ -17,6 +17,6 @@ export function makeCookieNames(prefix?: string) {
 		idTokenCookieName,
 		expiresInCookieName,
 		scopeCookieName,
-		tokenTypeCookieName,
+		tokenTypeCookieName
 	};
 }
