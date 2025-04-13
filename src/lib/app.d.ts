@@ -1,4 +1,4 @@
-import type { OIDCUser } from './types.ts';
+import type { OIDCUser } from './types.js';
 
 declare global {
 	namespace App {

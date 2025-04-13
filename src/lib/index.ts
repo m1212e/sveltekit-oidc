@@ -1,3 +1,3 @@
-export { makeOIDC } from './OIDC.ts';
-export type { OIDCUser } from './types.ts';
-export type * from './app.ts';
+export { makeOIDC } from './OIDC.js';
+export type { OIDCUser } from './types.js';
+export type * from './app.js';
