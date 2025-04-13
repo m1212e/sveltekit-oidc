@@ -5,7 +5,8 @@ import { TypeCompiler } from '@sinclair/typebox/compiler';
 
 const OIDCUserSchema = Type.Object({
 	sub: Type.String(),
-	email: Type.String({ format: 'email' }),
+	// email: Type.String({ format: 'email' }),
+	email: Type.String(),
 	preferred_username: Type.String(),
 	family_name: Type.String(),
 	given_name: Type.String(),
