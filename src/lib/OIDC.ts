@@ -22,9 +22,9 @@ import {
 	type AccessTokenResponse,
 	type IdTokenResponse,
 	type OIDCFlowState,
-	type OIDCUser,
 	type ValidationResponse,
-	isValidOIDCUser
+	parseOIDCFlowState,
+	parseOIDCUser
 } from './types.js';
 
 /**
@@ -81,7 +81,7 @@ export async function makeOIDC({
 	/**
 	 * Callback for when a user logged in successfully. Useful for upserting users to a db
 	 */
-	userLoggedInSuccessfully?: (user: OIDCUser) => Promise<void> | void;
+	userLoggedInSuccessfully?: (oidc: ValidationResponse) => Promise<void> | void;
 	/**
 	 * The route used for login flow.
 	 * Defaults to `/auth/login-callback`
@@ -168,7 +168,7 @@ export async function makeOIDC({
 		encrypted_state: string
 	) {
 		const verifier = cryptr.decrypt(encrypted_verifier);
-		const state = JSON.parse(cryptr.decrypt(encrypted_state)) as OIDCFlowState;
+		const state = parseOIDCFlowState(JSON.parse(cryptr.decrypt(encrypted_state)));
 		const tokens = await authorizationCodeGrant(config, visitedUrl, {
 			pkceCodeVerifier: verifier,
 			expectedState: JSON.stringify(state)
@@ -233,17 +233,11 @@ export async function makeOIDC({
 			throw new Error('Subject in access token and id token do not match');
 		}
 
-		const combined: AccessTokenResponse & IdTokenResponse = {
-			...(accessTokenValue || {}),
-			...(idTokenValue || {})
-		};
-
-		if (!isValidOIDCUser(combined)) {
-			throw new Error('Not all fields in id token are present');
-		}
-
 		return {
-			user: combined,
+			user: parseOIDCUser({
+				...(accessTokenValue || {}),
+				...(idTokenValue || {})
+			}),
 			accessToken: accessTokenValue,
 			idToken: idTokenValue
 		};
@@ -276,8 +270,8 @@ export async function makeOIDC({
 		req.cookies.delete(codeVerifierCookieName, { path: '/' });
 		req.cookies.delete(oidcStateCookieName, { path: '/' });
 
-		const user = await validateTokens(tokens);
-		await userLoggedInSuccessfully?.(user);
+		const oidc = await validateTokens(tokens);
+		await userLoggedInSuccessfully?.(oidc);
 
 		redirect(302, state.visitedUrl);
 	}

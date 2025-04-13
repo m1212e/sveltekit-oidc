@@ -1,30 +1,29 @@
-import { z } from 'zod';
 import type { JWTPayload } from 'jose';
 import type { IntrospectionResponse, UserInfoResponse } from 'openid-client';
+import { Type, type Static } from '@sinclair/typebox';
+import { TypeCompiler } from '@sinclair/typebox/compiler';
 
-export const OIDCUserSchema = z.object({
-	sub: z.string(),
-	email: z.string().email(),
-	preferred_username: z.string(),
-	family_name: z.string(),
-	given_name: z.string(),
+const OIDCUserSchema = Type.Object({
+	sub: Type.String(),
+	email: Type.String({ format: 'email' }),
+	preferred_username: Type.String(),
+	family_name: Type.String(),
+	given_name: Type.String(),
 
-	locale: z.string().optional(),
-	phone: z.string().optional()
+	locale: Type.Optional(Type.String()),
+	phone: Type.Optional(Type.String())
 });
-export type OIDCUser = z.infer<typeof OIDCUserSchema>;
-export function isValidOIDCUser(user: unknown): user is OIDCUser {
-	return OIDCUserSchema.safeParse(user).success;
-}
+export type OIDCUser = Static<typeof OIDCUserSchema>;
+const CompiledOIDCUser = TypeCompiler.Compile(OIDCUserSchema);
+export const parseOIDCUser = CompiledOIDCUser.Decode;
 
-export const OIDCFlowStateSchema = z.object({
-	visitedUrl: z.string(),
-	random: z.string()
+const OIDCFlowStateSchema = Type.Object({
+	visitedUrl: Type.String(),
+	random: Type.String()
 });
-export type OIDCFlowState = z.infer<typeof OIDCFlowStateSchema>;
-export function isValidOIDCFlowState(state: unknown): state is OIDCFlowState {
-	return OIDCFlowStateSchema.safeParse(state).success;
-}
+export type OIDCFlowState = Static<typeof OIDCFlowStateSchema>;
+const CompiledOIDCFlowState = TypeCompiler.Compile(OIDCFlowStateSchema);
+export const parseOIDCFlowState = CompiledOIDCFlowState.Decode;
 
 export type AccessTokenResponse = JWTPayload | IntrospectionResponse | undefined;
 export type IdTokenResponse = JWTPayload | IntrospectionResponse | UserInfoResponse | undefined;
