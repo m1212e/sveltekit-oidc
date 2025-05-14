@@ -9,10 +9,10 @@ const nullable = <T extends TSchema>(t: T) => Type.Union([Type.Null(), Type.Unde
 const OIDCUserSchema = Type.Object({
 	sub: Type.String(),
 	// email: Type.String({ format: 'email' }),
-	email: Type.String(),
-	preferred_username: Type.String(),
-	family_name: Type.String(),
-	given_name: Type.String(),
+	email: nullable(Type.String()),
+	preferred_username: nullable(Type.String()),
+	family_name: nullable(Type.String()),
+	given_name: nullable(Type.String()),
 
 	locale: nullable(Type.String()),
 	phone: nullable(Type.String())
