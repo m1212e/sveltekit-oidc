@@ -1,8 +1,10 @@
 import type { JWTPayload } from 'jose';
 import type { IntrospectionResponse, UserInfoResponse } from 'openid-client';
-import { Type, type Static } from '@sinclair/typebox';
+import { Type, type Static, type TSchema } from '@sinclair/typebox';
 import { TypeCompiler } from '@sinclair/typebox/compiler';
 import { Value } from '@sinclair/typebox/value';
+
+const nullable = <T extends TSchema>(t: T) => Type.Union([Type.Null(), Type.Undefined(), t]);
 
 const OIDCUserSchema = Type.Object({
 	sub: Type.String(),
@@ -12,8 +14,8 @@ const OIDCUserSchema = Type.Object({
 	family_name: Type.String(),
 	given_name: Type.String(),
 
-	locale: Type.Optional(Type.String()),
-	phone: Type.Optional(Type.String())
+	locale: nullable(Type.String()),
+	phone: nullable(Type.String())
 });
 export type OIDCUser = Static<typeof OIDCUserSchema>;
 const CompiledOIDCUser = TypeCompiler.Compile(OIDCUserSchema);
@@ -23,7 +25,7 @@ export const parseOIDCUser = (value: unknown) => {
 	// which might not be represented by the type schema
 	// to be leaked
 	// we want to make absolutety sure the type declaration matches the value exactly
-	return Value.Clean(OIDCUserSchema, {...v}) as typeof v;
+	return Value.Clean(OIDCUserSchema, { ...v }) as typeof v;
 };
 
 const OIDCFlowStateSchema = Type.Object({
