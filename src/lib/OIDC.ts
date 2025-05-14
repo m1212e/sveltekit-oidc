@@ -225,7 +225,7 @@ export async function makeOIDC({
 			]);
 
 			accessTokenValue = at.payload;
-			idTokenValue = idt.payload;
+			idTokenValue = idt?.payload;
 		} catch (error: any) {
 			console.warn(
 				'Failed to verify tokens locally, falling back to less performant info fetch:',
@@ -333,8 +333,8 @@ export async function makeOIDC({
 		const cookieOptions: Parameters<typeof req.cookies.set>[2] = {
 			path: '/',
 			httpOnly: true,
-			// sameSite: 'lax',
-			sameSite: 'strict',
+			sameSite: 'lax',
+			// sameSite: 'strict',
 			secure: true,
 			maxAge: tokens.expires_in ? tokens.expires_in * 1000 : undefined
 		};
