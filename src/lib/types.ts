@@ -4,7 +4,7 @@ import { Type, type Static, type TSchema } from '@sinclair/typebox';
 import { TypeCompiler } from '@sinclair/typebox/compiler';
 import { Value } from '@sinclair/typebox/value';
 
-const nullable = <T extends TSchema>(t: T) => Type.Union([Type.Null(), Type.Undefined(), t]);
+const nullable = <T extends TSchema>(t: T) => Type.Optional(Type.Union([Type.Null(), t]));
 
 const OIDCUserSchema = Type.Object({
 	sub: Type.String(),
