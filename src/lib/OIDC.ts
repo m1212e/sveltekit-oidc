@@ -27,6 +27,28 @@ import {
 	parseOIDCUser
 } from './types.js';
 
+// source: https://github.com/panva/jose/blob/2b42c5872b92a2c5662b26facd910b6d8e95f008/src/lib/jwt_claims_set.ts#L19-L31
+const checkAudiencePresence = ({
+	audOption: audOptionParam,
+	audPayload
+}: {
+	audPayload: string | string[] | undefined;
+	audOption: string[] | string;
+}) => {
+	const audOption = Array.isArray(audOptionParam) ? audOptionParam : [audOptionParam];
+	if (typeof audPayload === 'string') {
+		return audOption.includes(audPayload);
+	}
+
+	if (Array.isArray(audPayload)) {
+		// Each principal intended to process the JWT MUST
+		// identify itself with a value in the audience claim
+		return audOption.some(Set.prototype.has.bind(new Set(audPayload)));
+	}
+
+	return false;
+};
+
 /**
  * Create an OIDC instance
  */
@@ -224,6 +246,34 @@ export async function makeOIDC({
 					}
 				})()
 			]);
+
+			if (at && !at.active) {
+				throw new Error('Access token is not active');
+			}
+
+			if (idt && !idt.active) {
+				throw new Error('Id token is not active');
+			}
+
+			if (
+				accessTokenValue &&
+				!checkAudiencePresence({
+					audOption: oidcClientId,
+					audPayload: accessTokenValue.aud
+				})
+			) {
+				throw new Error('Access token audience does not match expected audience');
+			}
+
+			if (
+				idTokenValue &&
+				!checkAudiencePresence({
+					audOption: oidcClientId,
+					audPayload: idTokenValue.aud
+				})
+			) {
+				throw new Error('Id token audience does not match expected audience');
+			}
 
 			accessTokenValue = at;
 			idTokenValue = idt;
