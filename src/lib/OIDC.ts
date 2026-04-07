@@ -201,6 +201,27 @@ export async function makeOIDC({
 		return { tokens, state: strippedState };
 	}
 
+	/**
+	 * Try to extract claims from the access token via local JWT verification.
+	 * Returns the payload if the token is a valid JWT, or an empty object
+	 * if the token is opaque (e.g. Logto without a resource indicator).
+	 */
+	async function tryVerifyAccessTokenLocally(
+		access_token: string
+	): Promise<Record<string, unknown>> {
+		if (!jwks) return {};
+		try {
+			// Don't enforce audience here — some providers (e.g. Logto) use a
+			// resource indicator as the audience for access tokens, not the client ID.
+			const result = await jwtVerify(access_token, jwks, {
+				issuer: config.serverMetadata().issuer
+			});
+			return result.payload;
+		} catch {
+			return {};
+		}
+	}
+
 	async function validateTokens({
 		access_token,
 		id_token
@@ -208,6 +229,7 @@ export async function makeOIDC({
 		let accessTokenValue: AccessTokenResponse = undefined;
 		let idTokenValue: IdTokenResponse = undefined;
 
+		// ── Strategy 1: verify both tokens as JWTs (works for Zitadel, Keycloak, etc.) ──
 		try {
 			if (!jwks) throw new Error('No jwks available');
 
@@ -226,57 +248,115 @@ export async function makeOIDC({
 
 			accessTokenValue = at.payload;
 			idTokenValue = idt?.payload;
-		} catch (error: any) {
-			console.warn(
-				'Failed to verify tokens locally, falling back to less performant info fetch:',
-				error.message
+		} catch (strategy1Error: any) {
+			console.debug(
+				'[OIDC] Strategy 1 (full local JWT verification) failed:',
+				strategy1Error.message
 			);
 
-			const atTokenIntrospection = await tokenIntrospection(config, access_token);
-			const [at, idt] = await Promise.all([
-				atTokenIntrospection,
-				(async () => {
-					try {
-						if (!id_token) throw new Error('No id_token available');
-						return tokenIntrospection(config, id_token);
-					} catch (error) {
-						const accessT = await atTokenIntrospection;
-						if (!accessT?.sub) throw new Error('No access token available');
-						return fetchUserInfoFromIssuer(access_token, accessT.sub);
+			// ── Strategy 2: verify only the id_token + merge access token claims ──
+			// Works for providers with opaque access tokens (e.g. Logto)
+			if (jwks && id_token) {
+				try {
+					const idTokenResult = await jwtVerify(id_token, jwks, {
+						issuer: config.serverMetadata().issuer,
+						audience: oidcClientId
+					});
+
+					const accessTokenClaims = await tryVerifyAccessTokenLocally(access_token);
+
+					const merged = {
+						...idTokenResult.payload,
+						...accessTokenClaims,
+						// Preserve id_token's identity claims over access token's
+						sub: idTokenResult.payload.sub,
+						aud: idTokenResult.payload.aud,
+						iss: idTokenResult.payload.iss
+					};
+
+					const user = parseOIDCUser(merged);
+					if (user.sub && user.email) {
+						return { user, accessToken: merged, idToken: idTokenResult.payload };
 					}
-				})()
-			]);
 
-			if (at && !at.active) {
-				throw new Error('Access token is not active');
+					console.debug(
+						'[OIDC] Strategy 2 succeeded for id_token but missing profile fields, falling back to userinfo'
+					);
+
+					// id_token verified but incomplete — enrich with userinfo
+					const userInfo = await fetchUserInfoFromIssuer(
+						access_token,
+						idTokenResult.payload.sub!
+					);
+					const enriched = { ...userInfo, ...merged };
+					return {
+						user: parseOIDCUser(enriched),
+						accessToken: enriched,
+						idToken: idTokenResult.payload
+					};
+				} catch (strategy2Error: any) {
+					console.debug(
+						'[OIDC] Strategy 2 (id_token verification + userinfo) failed:',
+						strategy2Error.message
+					);
+				}
 			}
 
-			if (idt && !idt.active) {
-				throw new Error('Id token is not active');
-			}
+			// ── Strategy 3: token introspection (original fallback) ──
+			// Works for providers that support the introspection endpoint
+			try {
+				const atTokenIntrospection = await tokenIntrospection(config, access_token);
+				const [at, idt] = await Promise.all([
+					atTokenIntrospection,
+					(async () => {
+						try {
+							if (!id_token) throw new Error('No id_token available');
+							return tokenIntrospection(config, id_token);
+						} catch (error) {
+							const accessT = await atTokenIntrospection;
+							if (!accessT?.sub) throw new Error('No access token available');
+							return fetchUserInfoFromIssuer(access_token, accessT.sub);
+						}
+					})()
+				]);
 
-			if (
-				accessTokenValue &&
-				!checkAudiencePresence({
-					audOption: oidcClientId,
-					audPayload: accessTokenValue.aud
-				})
-			) {
-				throw new Error('Access token audience does not match expected audience');
-			}
+				if (at && !at.active) {
+					throw new Error('Access token is not active');
+				}
 
-			if (
-				idTokenValue &&
-				!checkAudiencePresence({
-					audOption: oidcClientId,
-					audPayload: idTokenValue.aud
-				})
-			) {
-				throw new Error('Id token audience does not match expected audience');
-			}
+				if (idt && !idt.active) {
+					throw new Error('Id token is not active');
+				}
 
-			accessTokenValue = at;
-			idTokenValue = idt;
+				accessTokenValue = at;
+				idTokenValue = idt;
+			} catch (strategy3Error: any) {
+				console.debug(
+					'[OIDC] Strategy 3 (token introspection) failed:',
+					strategy3Error.message
+				);
+
+				// ── Strategy 4: userinfo endpoint only (last resort) ──
+				try {
+					const userInfo = await fetchUserInfoFromIssuer(access_token, 'unknown');
+					const accessTokenClaims = await tryVerifyAccessTokenLocally(access_token);
+					const merged = { ...userInfo, ...accessTokenClaims };
+					const user = parseOIDCUser(merged);
+					if (!user.sub) {
+						throw new Error(
+							'Could not determine user identity from any available method'
+						);
+					}
+					return { user, accessToken: merged, idToken: merged };
+				} catch (strategy4Error: any) {
+					throw new Error(
+						`All token validation strategies failed. ` +
+							`Strategy 1 (JWT): ${strategy1Error.message}; ` +
+							`Strategy 3 (introspection): ${strategy3Error.message}; ` +
+							`Strategy 4 (userinfo): ${strategy4Error.message}`
+					);
+				}
+			}
 		}
 
 		if (accessTokenValue?.sub && idTokenValue?.sub && accessTokenValue?.sub !== idTokenValue?.sub) {
