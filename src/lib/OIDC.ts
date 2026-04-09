@@ -134,7 +134,7 @@ export async function makeOIDC({
 	);
 
 	const jwks_uri = config.serverMetadata().jwks_uri;
-	const jwks = jwks_uri ? await createRemoteJWKSet(new URL(jwks_uri)) : undefined;
+	const jwks = jwks_uri ? createRemoteJWKSet(new URL(jwks_uri)) : undefined;
 
 	const {
 		accessTokenCookieName,
@@ -185,27 +185,6 @@ export async function makeOIDC({
 		return { tokens, state: strippedState };
 	}
 
-	/**
-	 * Try to extract claims from the access token via local JWT verification.
-	 * Returns the payload if the token is a valid JWT, or an empty object
-	 * if the token is opaque (e.g. Logto without a resource indicator).
-	 */
-	async function tryVerifyAccessTokenLocally(
-		access_token: string
-	): Promise<Record<string, unknown>> {
-		if (!jwks) return {};
-		try {
-			// Don't enforce audience here — some providers (e.g. Logto) use a
-			// resource indicator as the audience for access tokens, not the client ID.
-			const result = await jwtVerify(access_token, jwks, {
-				issuer: config.serverMetadata().issuer
-			});
-			return result.payload;
-		} catch {
-			return {};
-		}
-	}
-
 	async function validateTokens({
 		access_token,
 		id_token
@@ -214,129 +193,88 @@ export async function makeOIDC({
 		let idTokenValue: IdTokenResponse = undefined;
 
 		// ── Strategy 1: verify both tokens as JWTs (works for Zitadel, Keycloak, etc.) ──
-		try {
-			if (!jwks) throw new Error('No jwks available');
-
-			const [at, idt] = await Promise.all([
-				jwtVerify(access_token, jwks, {
-					issuer: config.serverMetadata().issuer,
-					audience: oidcClientId
-				}),
-				id_token
-					? jwtVerify(id_token, jwks, {
-							issuer: config.serverMetadata().issuer,
-							audience: oidcClientId
-						})
-					: Promise.resolve(undefined)
-			]);
-
-			accessTokenValue = at.payload;
-			idTokenValue = idt?.payload;
-		} catch (strategy1Error: any) {
-			console.debug(
-				'[OIDC] Strategy 1 (full local JWT verification) failed:',
-				strategy1Error.message
-			);
-
-			// ── Strategy 2: verify only the id_token + merge access token claims ──
-			// Works for providers with opaque access tokens (e.g. Logto)
-			if (jwks && id_token) {
-				try {
-					const idTokenResult = await jwtVerify(id_token, jwks, {
+		if (jwks) {
+			const promises = [];
+			if (access_token) {
+				promises.push(
+					jwtVerify(access_token, jwks, {
 						issuer: config.serverMetadata().issuer,
 						audience: oidcClientId
-					});
-
-					const accessTokenClaims = await tryVerifyAccessTokenLocally(access_token);
-
-					const merged = {
-						...idTokenResult.payload,
-						...accessTokenClaims,
-						// Preserve id_token's identity claims over access token's
-						sub: idTokenResult.payload.sub,
-						aud: idTokenResult.payload.aud,
-						iss: idTokenResult.payload.iss
-					};
-
-					const user = parseOIDCUser(merged);
-					if (user.email) {
-						return { user, accessToken: merged, idToken: idTokenResult.payload };
-					}
-
-					console.debug(
-						'[OIDC] Strategy 2 succeeded for id_token but missing profile fields, falling back to userinfo'
-					);
-
-					// id_token verified but incomplete — enrich with userinfo
-					const userInfo = await fetchUserInfoFromIssuer(access_token, idTokenResult.payload.sub!);
-					const enriched = { ...userInfo, ...merged };
-					return {
-						user: parseOIDCUser(enriched),
-						accessToken: enriched,
-						idToken: idTokenResult.payload
-					};
-				} catch (strategy2Error: any) {
-					console.debug(
-						'[OIDC] Strategy 2 (id_token verification + userinfo) failed:',
-						strategy2Error.message
-					);
-				}
+					})
+						.then((result) => {
+							accessTokenValue = result.payload;
+						})
+						.catch((error) => {
+							console.debug('[OIDC] Access token JWT verification failed:', error.message);
+						})
+				);
 			}
-
-			// ── Strategy 3: token introspection (original fallback) ──
-			// Works for providers that support the introspection endpoint
-			try {
-				const atTokenIntrospection = await tokenIntrospection(config, access_token);
-				const [at, idt] = await Promise.all([
-					atTokenIntrospection,
-					(async () => {
-						try {
-							if (!id_token) throw new Error('No id_token available');
-							return tokenIntrospection(config, id_token);
-						} catch (err) {
-							const accessT = await atTokenIntrospection;
-							if (!accessT?.sub) throw new Error('No access token available', { cause: err });
-							return fetchUserInfoFromIssuer(access_token, accessT.sub);
-						}
-					})()
-				]);
-
-				if (at && !at.active) {
-					throw new Error('Access token is not active');
-				}
-
-				if (idt && !idt.active) {
-					throw new Error('Id token is not active');
-				}
-
-				accessTokenValue = at;
-				idTokenValue = idt;
-			} catch (strategy3Error: any) {
-				console.debug('[OIDC] Strategy 3 (token introspection) failed:', strategy3Error.message);
-
-				// ── Strategy 4: userinfo endpoint only (last resort) ──
-				try {
-					const userInfo = await fetchUserInfoFromIssuer(access_token, 'unknown');
-					const accessTokenClaims = await tryVerifyAccessTokenLocally(access_token);
-					const merged = { ...userInfo, ...accessTokenClaims };
-					const user = parseOIDCUser(merged);
-					if (!user.sub) {
-						throw new Error('Could not determine user identity from any available method');
-					}
-					return { user, accessToken: merged, idToken: merged };
-				} catch (strategy4Error: any) {
-					throw new Error(
-						`All token validation strategies failed. ` +
-							`Strategy 1 (JWT): ${strategy1Error.message}; ` +
-							`Strategy 3 (introspection): ${strategy3Error.message}; ` +
-							`Strategy 4 (userinfo): ${strategy4Error.message}`,
-						{ cause: strategy4Error }
-					);
-				}
+			if (id_token) {
+				promises.push(
+					jwtVerify(id_token, jwks, {
+						issuer: config.serverMetadata().issuer,
+						audience: oidcClientId
+					})
+						.then((result) => {
+							idTokenValue = result.payload;
+						})
+						.catch((error) => {
+							console.debug('[OIDC] Id token JWT verification failed:', error.message);
+						})
+				);
 			}
+			await Promise.allSettled(promises);
 		}
 
-		if (accessTokenValue?.sub && idTokenValue?.sub && accessTokenValue?.sub !== idTokenValue?.sub) {
+		// ── Strategy 2: get claims from introspection endpoint  ──
+		// Works for providers with opaque access tokens (e.g. Logto)
+		if (!accessTokenValue || !idTokenValue) {
+			console.debug(
+				'[OIDC] Could not verify tokens locally, trying introspection endpoint if available...'
+			);
+			const promises = [];
+			if (!accessTokenValue) {
+				promises.push(
+					tokenIntrospection(config, access_token)
+						.then((result) => {
+							if (!result.active) {
+								throw new Error('Access token is not active');
+							}
+							accessTokenValue = result;
+						})
+						.catch((error) => {
+							console.debug('[OIDC] Access token introspection failed:', error.message);
+						})
+				);
+			}
+
+			if (!idTokenValue && id_token) {
+				promises.push(
+					tokenIntrospection(config, id_token)
+						.then((result) => {
+							if (!result.active) {
+								throw new Error('Id token is not active');
+							}
+							idTokenValue = result;
+						})
+						.catch((error) => {
+							console.debug('[OIDC] Id token introspection failed:', error.message);
+						})
+				);
+			}
+
+			await Promise.allSettled(promises);
+		}
+
+		if ((!accessTokenValue && access_token) || (!idTokenValue && id_token)) {
+			idTokenValue = await fetchUserInfoFromIssuer(access_token, 'unknown');
+		}
+
+		if (
+			(accessTokenValue as any)?.sub &&
+			idTokenValue?.sub &&
+			(accessTokenValue as any)?.sub !== idTokenValue?.sub
+		) {
 			throw new Error('Subject in access token and id token do not match');
 		}
 
