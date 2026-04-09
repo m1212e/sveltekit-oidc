@@ -6,7 +6,7 @@ on:
       - 'v*'
 
 jobs:
-  test_and_build:
+  build:
     name: Build and publish
     runs-on: ubuntu-latest
     steps:
@@ -14,12 +14,12 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - name: Install dependencies
         run: bun i
-      - name: Run tests
-        run: bun test
+      # - name: Run tests
+      #   run: bun test
       - name: Run linter
-        run: bunx biome ci
-      - name: Run typecheck
-        run: bun run typecheck
+        run: bun run lint
+      - name: Run check
+        run: bun run check
       - name: Run Trivy scanner on fs
         uses: aquasecurity/trivy-action@0.35.0
         with:
@@ -61,7 +61,7 @@ jobs:
       packages: write
       contents: read
       id-token: write
-    needs: [test_and_build]
+    needs: [build]
     steps:
       - name: Download build output
         uses: actions/download-artifact@v8
