@@ -1,6 +1,4 @@
-import { randomBytes } from 'node:crypto';
 import { type Handle, type RequestEvent, error, redirect } from '@sveltejs/kit';
-import Cryptr from 'cryptr';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import {
 	type TokenEndpointResponse,
@@ -57,7 +55,6 @@ export async function makeOIDC({
 	oidcAuthority,
 	oidcClientId,
 	oidcClientSecret,
-	secret,
 	oidcScope,
 	logoutPath = '/',
 	cookiePrefix,
@@ -83,10 +80,6 @@ export async function makeOIDC({
 	 * The client secret of the OpenID client
 	 */
 	oidcClientSecret?: string;
-	/**
-	 * A secret to encrypt sensitive info
-	 */
-	secret?: string;
 	/**
 	 * The scope of the requested token
 	 */
@@ -143,8 +136,6 @@ export async function makeOIDC({
 	const jwks_uri = config.serverMetadata().jwks_uri;
 	const jwks = jwks_uri ? await createRemoteJWKSet(new URL(jwks_uri)) : undefined;
 
-	const cryptr = new Cryptr(secret ?? randomBytes(100).toString('hex'));
-
 	const {
 		accessTokenCookieName,
 		codeVerifierCookieName,
@@ -158,45 +149,42 @@ export async function makeOIDC({
 
 	async function startSignin(visitedUrl: URL) {
 		const code_verifier = randomPKCECodeVerifier();
-		const encrypted_verifier = cryptr.encrypt(code_verifier);
 		const code_challenge = await calculatePKCECodeChallenge(code_verifier);
 		const state: OIDCFlowState = {
 			visitedUrl: visitedUrl.toString(),
 			random: randomState()
 		};
-		const serialized_state = JSON.stringify(state);
-		const encrypted_state = cryptr.encrypt(serialized_state);
+    const serialized_state = JSON.stringify(state);
 
 		const parameters: Record<string, string> = {
 			redirect_uri: `${visitedUrl.origin}${loginCallbackRoute}`,
 			scope: oidcScope ?? 'openid profile email',
 			code_challenge,
 			code_challenge_method: 'S256',
-			state: serialized_state
+			state:  serialized_state
 		};
 
 		const redirect_uri = buildAuthorizationUrl(config, parameters);
 
 		return {
-			encrypted_verifier,
+			code_verifier,
 			redirect_uri,
-			encrypted_state
+			state:  serialized_state
 		};
 	}
 
 	async function resolveSignin(
 		visitedUrl: URL,
-		encrypted_verifier: string,
-		encrypted_state: string
+		verifier: string,
+		state: string
 	) {
-		const verifier = cryptr.decrypt(encrypted_verifier);
-		const state = parseOIDCFlowState(JSON.parse(cryptr.decrypt(encrypted_state)));
+		const parsedState = parseOIDCFlowState(JSON.parse(state));
 		const tokens = await authorizationCodeGrant(config, visitedUrl, {
 			pkceCodeVerifier: verifier,
-			expectedState: JSON.stringify(state)
+			expectedState: JSON.stringify(parsedState)
 		});
-		(state as any).random = undefined;
-		const strippedState: Omit<OIDCFlowState, 'random'> = { ...state };
+		(parsedState as any).random = undefined;
+		const strippedState: Omit<OIDCFlowState, 'random'> = { ...parsedState };
 
 		return { tokens, state: strippedState };
 	}
@@ -416,7 +404,7 @@ export async function makeOIDC({
 			sameSite: 'lax',
 			// sameSite: 'strict',
 			secure: true,
-			maxAge: tokens.expires_in ? tokens.expires_in * 1000 : undefined
+			maxAge: tokens.expires_in ? tokens.expires_in  : undefined
 		};
 
 		req.cookies.set(accessTokenCookieName, tokens.access_token, cookieOptions);
@@ -491,9 +479,9 @@ export async function makeOIDC({
 				return resolve(event);
 			}
 
-			const { encrypted_state, encrypted_verifier, redirect_uri } = await startSignin(event.url);
+			const { state, code_verifier, redirect_uri } = await startSignin(event.url);
 
-			event.cookies.set(codeVerifierCookieName, encrypted_verifier, {
+			event.cookies.set(codeVerifierCookieName, code_verifier, {
 				sameSite: 'lax',
 				maxAge: 60 * 5,
 				path: '/',
@@ -501,7 +489,7 @@ export async function makeOIDC({
 				httpOnly: true
 			});
 
-			event.cookies.set(oidcStateCookieName, encrypted_state, {
+			event.cookies.set(oidcStateCookieName, state, {
 				sameSite: 'lax',
 				maxAge: 60 * 5,
 				path: '/',

@@ -1,34 +1,88 @@
 name: Build client
 
 on:
-  release:
-    types: [created]
+  push:
+    tags:
+      - 'v*'
 
 jobs:
   test_and_build:
-    name: Build and publish client
+    name: Build and publish
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: oven-sh/setup-bun@v1
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
       - name: Install dependencies
-        run: bun i --frozen-lockfile
-      # - name: Run tests
-      #   run: bun test
+        run: bun i
+      - name: Run tests
+        run: bun test
+      - name: Run linter
+        run: bunx biome ci
+      - name: Run typecheck
+        run: bun run typecheck
+      - name: Run Trivy scanner on fs
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          exit-code: 1
+          format: 'table'
+          ignore-unfixed: true
+          vuln-type: 'library'
+          severity: 'CRITICAL,HIGH'
       - name: Run build
         run: bun run build
         env:
           REF_NAME: ${{ github.ref_name }}
-      - name: Set tag
-        id: tag
-        run: |
-          if [[ "${{ github.event.release.prerelease }}" == "true"  ]]; then
-            echo "tag=dev" >> $GITHUB_OUTPUT
-          elif [[ "${{ github.event.release.prerelease }}" == "false" ]]; then
-            echo "tag=latest" >> $GITHUB_OUTPUT
-          fi
-      - uses: JS-DevTools/npm-publish@v3
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
         with:
-          token: ${{ secrets.NPM_TOKEN }}
-          # package: ./out/package.json
-          tag: ${{ steps.tag.outputs.tag }}
+          name: client-build-output
+          path: |
+            out
+            package.json
+            README.md
+            LICENSE
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: github.ref_type == 'tag'
+        with:
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish:
+    strategy:
+      fail-fast: false
+      matrix:
+        registry-url: ['https://npm.pkg.github.com', 'https://registry.npmjs.org']
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
+      id-token: write
+    needs: [test_and_build]
+    steps:
+      - name: Download build output
+        uses: actions/download-artifact@v8
+        with:
+          name: client-build-output
+          path: .
+      - name: Set registry token
+        id: token
+        run: |
+          if [[ "${{ matrix.registry-url }}" == "https://npm.pkg.github.com" ]]; then
+            echo "token=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_OUTPUT
+          fi
+
+          if [[ "${{ matrix.registry-url }}" == "https://registry.npmjs.org" ]]; then
+            echo "token=${{ secrets.NPM_TOKEN }}" >> $GITHUB_OUTPUT
+          fi
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          registry-url: ${{ matrix.registry-url }}
+      - name: Publish package
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ steps.token.outputs.token }}

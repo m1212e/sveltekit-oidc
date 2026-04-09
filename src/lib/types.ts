@@ -1,8 +1,8 @@
 import type { JWTPayload } from 'jose';
 import type { IntrospectionResponse, UserInfoResponse } from 'openid-client';
-import { Type, type Static, type TSchema } from '@sinclair/typebox';
-import { TypeCompiler } from '@sinclair/typebox/compiler';
-import { Value } from '@sinclair/typebox/value';
+import { Type, type Static, type TSchema } from 'typebox';
+import { Compile } from 'typebox/schema';
+import { Value } from 'typebox/value';
 
 const nullable = <T extends TSchema>(t: T) => Type.Optional(Type.Union([Type.Null(), t]));
 
@@ -18,14 +18,21 @@ const OIDCUserSchema = Type.Object({
 	phone: nullable(Type.String())
 });
 export type OIDCUser = Static<typeof OIDCUserSchema>;
-const CompiledOIDCUser = TypeCompiler.Compile(OIDCUserSchema);
+const CompiledOIDCUser = Compile(OIDCUserSchema);
 export const parseOIDCUser = (value: unknown) => {
-	const v = CompiledOIDCUser.Decode(value);
+	const v = CompiledOIDCUser.Parse(value);
 	// we clean this from excess values to prevent sensitive info
 	// which might not be represented by the type schema
 	// to be leaked
 	// we want to make absolutety sure the type declaration matches the value exactly
-	return Value.Clean(OIDCUserSchema, { ...v }) as typeof v;
+  const cleaned = Value.Clean(OIDCUserSchema, { ...v }) as typeof v;
+
+  if (cleaned.email) {
+    // normalize email to lowercase to prevent case sensitivity issues
+    cleaned.email = String(cleaned.email).toLowerCase();
+  }
+
+  return cleaned;
 };
 
 const OIDCFlowStateSchema = Type.Object({
@@ -33,8 +40,8 @@ const OIDCFlowStateSchema = Type.Object({
 	random: Type.String()
 });
 export type OIDCFlowState = Static<typeof OIDCFlowStateSchema>;
-const CompiledOIDCFlowState = TypeCompiler.Compile(OIDCFlowStateSchema);
-export const parseOIDCFlowState = (value: unknown) => CompiledOIDCFlowState.Decode(value);
+const CompiledOIDCFlowState = Compile(OIDCFlowStateSchema);
+export const parseOIDCFlowState = (value: unknown) => CompiledOIDCFlowState.Parse(value);
 
 export type AccessTokenResponse = JWTPayload | IntrospectionResponse | undefined;
 export type IdTokenResponse = JWTPayload | IntrospectionResponse | UserInfoResponse | undefined;
