@@ -25,14 +25,14 @@ export const parseOIDCUser = (value: unknown) => {
 	// which might not be represented by the type schema
 	// to be leaked
 	// we want to make absolutety sure the type declaration matches the value exactly
-  const cleaned = Value.Clean(OIDCUserSchema, { ...v }) as typeof v;
+	const cleaned = Value.Clean(OIDCUserSchema, { ...v }) as typeof v;
 
-  if (cleaned.email) {
-    // normalize email to lowercase to prevent case sensitivity issues
-    cleaned.email = String(cleaned.email).toLowerCase();
-  }
+	if (cleaned.email) {
+		// normalize email to lowercase to prevent case sensitivity issues
+		cleaned.email = String(cleaned.email).toLowerCase();
+	}
 
-  return cleaned;
+	return cleaned;
 };
 
 const OIDCFlowStateSchema = Type.Object({

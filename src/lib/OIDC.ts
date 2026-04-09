@@ -154,14 +154,14 @@ export async function makeOIDC({
 			visitedUrl: visitedUrl.toString(),
 			random: randomState()
 		};
-    const serialized_state = JSON.stringify(state);
+		const serialized_state = JSON.stringify(state);
 
 		const parameters: Record<string, string> = {
 			redirect_uri: `${visitedUrl.origin}${loginCallbackRoute}`,
 			scope: oidcScope ?? 'openid profile email',
 			code_challenge,
 			code_challenge_method: 'S256',
-			state:  serialized_state
+			state: serialized_state
 		};
 
 		const redirect_uri = buildAuthorizationUrl(config, parameters);
@@ -169,15 +169,11 @@ export async function makeOIDC({
 		return {
 			code_verifier,
 			redirect_uri,
-			state:  serialized_state
+			state: serialized_state
 		};
 	}
 
-	async function resolveSignin(
-		visitedUrl: URL,
-		verifier: string,
-		state: string
-	) {
+	async function resolveSignin(visitedUrl: URL, verifier: string, state: string) {
 		const parsedState = parseOIDCFlowState(JSON.parse(state));
 		const tokens = await authorizationCodeGrant(config, visitedUrl, {
 			pkceCodeVerifier: verifier,
@@ -263,7 +259,7 @@ export async function makeOIDC({
 					};
 
 					const user = parseOIDCUser(merged);
-					if (user.sub && user.email) {
+					if (user.email) {
 						return { user, accessToken: merged, idToken: idTokenResult.payload };
 					}
 
@@ -272,10 +268,7 @@ export async function makeOIDC({
 					);
 
 					// id_token verified but incomplete — enrich with userinfo
-					const userInfo = await fetchUserInfoFromIssuer(
-						access_token,
-						idTokenResult.payload.sub!
-					);
+					const userInfo = await fetchUserInfoFromIssuer(access_token, idTokenResult.payload.sub!);
 					const enriched = { ...userInfo, ...merged };
 					return {
 						user: parseOIDCUser(enriched),
@@ -300,9 +293,9 @@ export async function makeOIDC({
 						try {
 							if (!id_token) throw new Error('No id_token available');
 							return tokenIntrospection(config, id_token);
-						} catch (error) {
+						} catch (err) {
 							const accessT = await atTokenIntrospection;
-							if (!accessT?.sub) throw new Error('No access token available');
+							if (!accessT?.sub) throw new Error('No access token available', { cause: err });
 							return fetchUserInfoFromIssuer(access_token, accessT.sub);
 						}
 					})()
@@ -319,10 +312,7 @@ export async function makeOIDC({
 				accessTokenValue = at;
 				idTokenValue = idt;
 			} catch (strategy3Error: any) {
-				console.debug(
-					'[OIDC] Strategy 3 (token introspection) failed:',
-					strategy3Error.message
-				);
+				console.debug('[OIDC] Strategy 3 (token introspection) failed:', strategy3Error.message);
 
 				// ── Strategy 4: userinfo endpoint only (last resort) ──
 				try {
@@ -331,9 +321,7 @@ export async function makeOIDC({
 					const merged = { ...userInfo, ...accessTokenClaims };
 					const user = parseOIDCUser(merged);
 					if (!user.sub) {
-						throw new Error(
-							'Could not determine user identity from any available method'
-						);
+						throw new Error('Could not determine user identity from any available method');
 					}
 					return { user, accessToken: merged, idToken: merged };
 				} catch (strategy4Error: any) {
@@ -341,7 +329,8 @@ export async function makeOIDC({
 						`All token validation strategies failed. ` +
 							`Strategy 1 (JWT): ${strategy1Error.message}; ` +
 							`Strategy 3 (introspection): ${strategy3Error.message}; ` +
-							`Strategy 4 (userinfo): ${strategy4Error.message}`
+							`Strategy 4 (userinfo): ${strategy4Error.message}`,
+						{ cause: strategy4Error }
 					);
 				}
 			}
@@ -404,7 +393,7 @@ export async function makeOIDC({
 			sameSite: 'lax',
 			// sameSite: 'strict',
 			secure: true,
-			maxAge: tokens.expires_in ? tokens.expires_in  : undefined
+			maxAge: tokens.expires_in ? tokens.expires_in : undefined
 		};
 
 		req.cookies.set(accessTokenCookieName, tokens.access_token, cookieOptions);
@@ -452,7 +441,7 @@ export async function makeOIDC({
 			const accessToken = event.cookies.get(accessTokenCookieName);
 			const idToken = event.cookies.get(idTokenCookieName);
 			if (!accessToken) {
-				throw new Error('No access token found');
+				error(400, 'No access token found');
 			}
 			event.locals.oidc = await validateTokens({
 				access_token: accessToken,
