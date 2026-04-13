@@ -39,7 +39,7 @@ jobs:
         with:
           name: client-build-output
           path: |
-            out
+            dist
             package.json
             README.md
             LICENSE
