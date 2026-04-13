@@ -9,10 +9,10 @@
 	},
 	"scripts": {
 		"dev": "vite dev",
-		"build": "vite build && npm run prepack",
+		"build": "vite build && npm run prepack_",
 		"preview": "vite preview",
-		"prepare": "svelte-kit sync || echo ''",
-		"prepack": "svelte-kit sync && svelte-package && bun adjustVersion.ts && publint",
+		"prepare_": "svelte-kit sync || echo ''",
+		"prepack_": "svelte-kit sync && svelte-package && publint",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"format": "prettier --write .",
