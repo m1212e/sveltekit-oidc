@@ -61,7 +61,8 @@ export async function makeOIDC({
 	userLoggedInSuccessfully,
 	loginCallbackRoute = '/auth/login-callback',
 	logoutCallbackRoute = '/auth/logout-callback',
-	authenticatedRoutes
+	authenticatedRoutes,
+	allowBearerToken = true
 }: {
 	/**
 	 * If the server is running in development mode.
@@ -115,6 +116,12 @@ export async function makeOIDC({
 	 * Routes that are protected and should trigger a login if the user is not authenticated
 	 */
 	authenticatedRoutes: string[];
+	/**
+	 * Whether to accept a bearer token from the `Authorization` header when no access token
+	 * cookie is present. Useful for API clients that cannot use cookies.
+	 * @default true
+	 */
+	allowBearerToken?: boolean;
 }) {
 	const execute = [];
 	if (development) {
@@ -375,8 +382,27 @@ export async function makeOIDC({
 			await handleLogoutRedirect(event);
 		}
 
+		const accessTokenFromCookie = event.cookies.get(accessTokenCookieName);
+
+		// Bearer token auth: used when no cookie is present (e.g. API clients)
+		if (allowBearerToken && !accessTokenFromCookie) {
+			const authHeader = event.request.headers.get('authorization');
+			if (authHeader?.toLowerCase().startsWith('bearer ')) {
+				const bearerToken = authHeader.slice(7);
+				try {
+					event.locals.oidc = await validateTokens({
+						access_token: bearerToken,
+						id_token: undefined
+					});
+					return resolve(event);
+				} catch {
+					error(401, 'Invalid bearer token');
+				}
+			}
+		}
+
 		try {
-			const accessToken = event.cookies.get(accessTokenCookieName);
+			const accessToken = accessTokenFromCookie;
 			const idToken = event.cookies.get(idTokenCookieName);
 			if (!accessToken) {
 				error(400, 'No access token found');
