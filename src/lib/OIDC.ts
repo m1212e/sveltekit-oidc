@@ -16,6 +16,7 @@ import {
 	tokenIntrospection
 } from 'openid-client';
 import { makeCookieNames } from './cookie.js';
+import { type Logger, type LogLevel, buildLogger } from './logger.js';
 import {
 	type AccessTokenResponse,
 	type IdTokenResponse,
@@ -62,7 +63,9 @@ export async function makeOIDC({
 	loginCallbackRoute = '/auth/login-callback',
 	logoutCallbackRoute = '/auth/logout-callback',
 	authenticatedRoutes,
-	allowBearerToken = true
+	allowBearerToken = true,
+	logger,
+	logLevel
 }: {
 	/**
 	 * If the server is running in development mode.
@@ -122,7 +125,20 @@ export async function makeOIDC({
 	 * @default true
 	 */
 	allowBearerToken?: boolean;
+	/**
+	 * Custom logger instance. Must implement `{ debug, info, warn, error }`.
+	 * Compatible with `console`, pino, winston, etc.
+	 * When provided, `logLevel` is ignored.
+	 */
+	logger?: Logger;
+	/**
+	 * Minimum log level for the built-in logger. Has no effect when `logger` is provided.
+	 * @default 'warn'
+	 */
+	logLevel?: LogLevel;
 }) {
+	const log = buildLogger(logger, logLevel);
+
 	const execute = [];
 	if (development) {
 		execute.push(allowInsecureRequests);
@@ -212,7 +228,7 @@ export async function makeOIDC({
 							accessTokenValue = result.payload;
 						})
 						.catch((error) => {
-							console.debug('[OIDC] Access token JWT verification failed:', error.message);
+							log.debug('[OIDC] Access token JWT verification failed:', error.message);
 						})
 				);
 			}
@@ -226,7 +242,7 @@ export async function makeOIDC({
 							idTokenValue = result.payload;
 						})
 						.catch((error) => {
-							console.debug('[OIDC] Id token JWT verification failed:', error.message);
+							log.debug('[OIDC] Id token JWT verification failed:', error.message);
 						})
 				);
 			}
@@ -236,7 +252,7 @@ export async function makeOIDC({
 		// ── Strategy 2: get claims from introspection endpoint  ──
 		// Works for providers with opaque access tokens (e.g. Logto)
 		if (!accessTokenValue || !idTokenValue) {
-			console.debug(
+			log.debug(
 				'[OIDC] Could not verify tokens locally, trying introspection endpoint if available...'
 			);
 			const promises = [];
@@ -250,7 +266,7 @@ export async function makeOIDC({
 							accessTokenValue = result;
 						})
 						.catch((error) => {
-							console.debug('[OIDC] Access token introspection failed:', error.message);
+							log.debug('[OIDC] Access token introspection failed:', error.message);
 						})
 				);
 			}
@@ -265,7 +281,7 @@ export async function makeOIDC({
 							idTokenValue = result;
 						})
 						.catch((error) => {
-							console.debug('[OIDC] Id token introspection failed:', error.message);
+							log.debug('[OIDC] Id token introspection failed:', error.message);
 						})
 				);
 			}
@@ -282,7 +298,8 @@ export async function makeOIDC({
 			idTokenValue?.sub &&
 			(accessTokenValue as any)?.sub !== idTokenValue?.sub
 		) {
-			throw new Error('Subject in access token and id token do not match');
+			log.warn('[OIDC] Subject in access token and id token do not match');
+		throw new Error('Subject in access token and id token do not match');
 		}
 
 		return {
@@ -395,7 +412,8 @@ export async function makeOIDC({
 						id_token: undefined
 					});
 					return resolve(event);
-				} catch {
+				} catch (err) {
+					log.warn('[OIDC] Bearer token validation failed:', (err as Error).message);
 					error(401, 'Invalid bearer token');
 				}
 			}
@@ -421,8 +439,8 @@ export async function makeOIDC({
 					setTokenCookiesOnRequest(event, newTokenSet);
 					event.locals.oidc = await validateTokens(newTokenSet);
 					return resolve(event);
-				} catch (error) {
-					// console.warn('Error refreshing token', error);
+				} catch (err) {
+					log.warn('[OIDC] Error refreshing token:', (err as Error).message);
 				}
 			}
 
