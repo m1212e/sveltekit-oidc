@@ -299,7 +299,7 @@ export async function makeOIDC({
 			(accessTokenValue as any)?.sub !== idTokenValue?.sub
 		) {
 			log.warn('[OIDC] Subject in access token and id token do not match');
-		throw new Error('Subject in access token and id token do not match');
+			throw new Error('Subject in access token and id token do not match');
 		}
 
 		return {

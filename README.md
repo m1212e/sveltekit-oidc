@@ -30,8 +30,8 @@ By default the library logs `warn` and `error` messages via `console`. You can c
 
 ```ts
 export const OIDC = await makeOIDC({
-    // ...
-    logLevel: 'debug' // 'silent' | 'error' | 'warn' | 'info' | 'debug'
+	// ...
+	logLevel: 'debug' // 'silent' | 'error' | 'warn' | 'info' | 'debug'
 });
 ```
 
