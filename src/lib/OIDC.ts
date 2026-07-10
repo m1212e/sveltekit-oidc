@@ -1,6 +1,7 @@
 import { type Handle, type RequestEvent, error, redirect } from '@sveltejs/kit';
-import { createRemoteJWKSet, decodeJwt, jwtVerify } from 'jose';
+import { createRemoteJWKSet, decodeJwt, jwtVerify, type JWTPayload } from 'jose';
 import {
+	type IntrospectionResponse,
 	type TokenEndpointResponse,
 	type TokenEndpointResponseHelpers,
 	allowInsecureRequests,
@@ -13,6 +14,7 @@ import {
 	randomPKCECodeVerifier,
 	randomState,
 	refreshTokenGrant,
+	skipSubjectCheck,
 	tokenIntrospection
 } from 'openid-client';
 import { makeCookieNames } from './cookie.js';
@@ -209,6 +211,62 @@ export async function makeOIDC({
 		return { tokens, state: strippedState };
 	}
 
+	/**
+	 * Validates a token — any token, access/id/refresh/whatever — using the
+	 * same two network-agnostic-first strategy the regular flow relies on: a
+	 * local JWT check (works for Zitadel, Keycloak, etc.), falling back to the
+	 * introspection endpoint for providers with opaque tokens (e.g. Logto).
+	 * Makes no assumption about what kind of token it is. Returns the verified
+	 * claims, or `undefined` if neither strategy could confirm it's valid.
+	 */
+	async function validateToken(
+		token: string
+	): Promise<JWTPayload | IntrospectionResponse | undefined> {
+		if (jwks) {
+			try {
+				const result = await jwtVerify(token, jwks, {
+					issuer: config.serverMetadata().issuer,
+					audience: oidcClientId
+				});
+				return result.payload;
+			} catch (error) {
+				log.debug('[OIDC] Token JWT verification failed:', (error as Error).message);
+			}
+		}
+
+		try {
+			const result = await tokenIntrospection(config, token);
+			if (!result.active) {
+				throw new Error('Token is not active');
+			}
+			return result;
+		} catch (error) {
+			log.debug('[OIDC] Token introspection failed:', (error as Error).message);
+		}
+
+		return undefined;
+	}
+
+	/**
+	 * Checks whether a token is expired, by decoding it locally — no signature
+	 * verification, no network — and comparing its `exp` claim to now. Returns
+	 * true if the token isn't a decodable JWT, has no `exp` claim, or has
+	 * expired. jose has no ready-made "is this expired" check: `jwtVerify`
+	 * enforces `exp` but only as part of a full signature verification, and
+	 * `decodeJwt` (used here) is a plain, unverified decode with no exp check
+	 * of its own.
+	 */
+	function isTokenExpired(token: string): boolean {
+		try {
+			const { exp } = decodeJwt(token);
+			if (!exp) return true;
+			return exp * 1000 <= Date.now();
+		} catch (error) {
+			log.debug('[OIDC] Could not decode token to check expiry:', (error as Error).message);
+			return true;
+		}
+	}
+
 	async function validateTokens({
 		access_token,
 		id_token,
@@ -217,8 +275,6 @@ export async function makeOIDC({
 		TokenEndpointResponse,
 		'access_token' | 'id_token' | 'refresh_token'
 	>): Promise<ValidationResponse> {
-		let accessTokenValue: AccessTokenResponse = undefined;
-		let idTokenValue: IdTokenResponse = undefined;
 		let refreshTokenValue: RefreshTokenResponse = refresh_token;
 		if (refresh_token) {
 			try {
@@ -231,88 +287,25 @@ export async function makeOIDC({
 			}
 		}
 
-		// ── Strategy 1: verify both tokens as JWTs (works for Zitadel, Keycloak, etc.) ──
-		if (jwks) {
-			const promises = [];
-			if (access_token) {
-				promises.push(
-					jwtVerify(access_token, jwks, {
-						issuer: config.serverMetadata().issuer,
-						audience: oidcClientId
-					})
-						.then((result) => {
-							accessTokenValue = result.payload;
-						})
-						.catch((error) => {
-							log.debug('[OIDC] Access token JWT verification failed:', error.message);
-						})
-				);
-			}
-			if (id_token) {
-				promises.push(
-					jwtVerify(id_token, jwks, {
-						issuer: config.serverMetadata().issuer,
-						audience: oidcClientId
-					})
-						.then((result) => {
-							idTokenValue = result.payload;
-						})
-						.catch((error) => {
-							log.debug('[OIDC] Id token JWT verification failed:', error.message);
-						})
-				);
-			}
-			await Promise.allSettled(promises);
-		}
+		const [accessTokenValue, idTokenValue]: [AccessTokenResponse, IdTokenResponse] =
+			await Promise.all([
+				access_token ? validateToken(access_token) : undefined,
+				id_token ? validateToken(id_token) : undefined
+			]);
 
-		// ── Strategy 2: get claims from introspection endpoint  ──
-		// Works for providers with opaque access tokens (e.g. Logto)
-		if (!accessTokenValue || !idTokenValue) {
-			log.debug(
-				'[OIDC] Could not verify tokens locally, trying introspection endpoint if available...'
-			);
-			const promises = [];
-			if (!accessTokenValue) {
-				promises.push(
-					tokenIntrospection(config, access_token)
-						.then((result) => {
-							if (!result.active) {
-								throw new Error('Access token is not active');
-							}
-							accessTokenValue = result;
-						})
-						.catch((error) => {
-							log.debug('[OIDC] Access token introspection failed:', error.message);
-						})
-				);
-			}
-
-			if (!idTokenValue && id_token) {
-				promises.push(
-					tokenIntrospection(config, id_token)
-						.then((result) => {
-							if (!result.active) {
-								throw new Error('Id token is not active');
-							}
-							idTokenValue = result;
-						})
-						.catch((error) => {
-							log.debug('[OIDC] Id token introspection failed:', error.message);
-						})
-				);
-			}
-
-			await Promise.allSettled(promises);
-		}
-
-		if ((!accessTokenValue && access_token) || (!idTokenValue && id_token)) {
-			idTokenValue = await fetchUserInfoFromIssuer(access_token, 'unknown');
+		let finalIdTokenValue = idTokenValue;
+		if (access_token && ((!accessTokenValue && access_token) || (!finalIdTokenValue && id_token))) {
+			// We have no independently-verified subject to check the userinfo
+			// response against here — both tokens failed regular validation, so
+			// any `sub` we could decode would come from the same unverified
+			// token, adding no real protection over just skipping the check.
+			finalIdTokenValue = await fetchUserInfoFromIssuer(access_token, skipSubjectCheck);
 		}
 
 		if (
 			(accessTokenValue as any)?.sub &&
-			idTokenValue?.sub &&
-			(accessTokenValue as any)?.sub !== idTokenValue?.sub
+			finalIdTokenValue?.sub &&
+			(accessTokenValue as any)?.sub !== finalIdTokenValue?.sub
 		) {
 			log.warn('[OIDC] Subject in access token and id token do not match');
 			throw new Error('Subject in access token and id token do not match');
@@ -330,6 +323,19 @@ export async function makeOIDC({
 		};
 	}
 
+	/**
+	 * Exchanges a refresh token for a new token set via `refreshTokenGrant`.
+	 * On providers with refresh token rotation (e.g. Logto), this CONSUMES the
+	 * refresh token you pass in — the response's `refresh_token` is the only
+	 * one still valid afterwards. Callers MUST persist the new token set
+	 * (e.g. via `setTokenCookiesOnRequest`-equivalent cookie writes) somewhere
+	 * the browser will actually receive it, or the session becomes permanently
+	 * unrefreshable the next time this is called with the now-stale token.
+	 * Never call this from a context that can't write the result back to the
+	 * client (e.g. mid-connection on an already-open WebSocket) — use
+	 * `checkSessionLive`/`isTokenExpired`/`validateToken` instead for
+	 * read-only liveness checks that don't consume anything.
+	 */
 	async function refresh(refresh_token: string) {
 		return refreshTokenGrant(config, refresh_token);
 	}
@@ -351,7 +357,10 @@ export async function makeOIDC({
 		});
 	}
 
-	async function fetchUserInfoFromIssuer(access_token: string, expectedSubject: string) {
+	async function fetchUserInfoFromIssuer(
+		access_token: string,
+		expectedSubject: string | typeof skipSubjectCheck
+	) {
 		return fetchUserInfo(config, access_token, expectedSubject);
 	}
 
@@ -507,6 +516,14 @@ export async function makeOIDC({
 		handle,
 		fetchUserInfoFromIssuer,
 		getLogoutUrl,
-		checkSessionLive
+		startSignin,
+		resolveSignin,
+		handleLoginRedirect,
+		handleLogoutRedirect,
+		checkSessionLive,
+		isTokenExpired,
+		validateToken,
+		validateTokens,
+		refresh
 	};
 }
