@@ -1,5 +1,5 @@
 import { type Handle, type RequestEvent, error, redirect } from '@sveltejs/kit';
-import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { createRemoteJWKSet, decodeJwt, jwtVerify } from 'jose';
 import {
 	type TokenEndpointResponse,
 	type TokenEndpointResponseHelpers,
@@ -21,6 +21,7 @@ import {
 	type AccessTokenResponse,
 	type IdTokenResponse,
 	type OIDCFlowState,
+	type RefreshTokenResponse,
 	type ValidationResponse,
 	parseOIDCFlowState,
 	parseOIDCUser
@@ -210,10 +211,25 @@ export async function makeOIDC({
 
 	async function validateTokens({
 		access_token,
-		id_token
-	}: Pick<TokenEndpointResponse, 'access_token' | 'id_token'>): Promise<ValidationResponse> {
+		id_token,
+		refresh_token
+	}: Pick<
+		TokenEndpointResponse,
+		'access_token' | 'id_token' | 'refresh_token'
+	>): Promise<ValidationResponse> {
 		let accessTokenValue: AccessTokenResponse = undefined;
 		let idTokenValue: IdTokenResponse = undefined;
+		let refreshTokenValue: RefreshTokenResponse = refresh_token;
+		if (refresh_token) {
+			try {
+				refreshTokenValue = decodeJwt(refresh_token);
+			} catch (error) {
+				log.debug(
+					'[OIDC] Refresh token is not a decodable JWT, exposing raw value:',
+					(error as Error).message
+				);
+			}
+		}
 
 		// ── Strategy 1: verify both tokens as JWTs (works for Zitadel, Keycloak, etc.) ──
 		if (jwks) {
@@ -308,12 +324,25 @@ export async function makeOIDC({
 				...(idTokenValue || {})
 			}),
 			accessToken: accessTokenValue,
-			idToken: idTokenValue
+			idToken: idTokenValue,
+			refreshToken: refreshTokenValue,
+			checkSessionLive: refresh_token ? () => checkSessionLive(refresh_token) : undefined
 		};
 	}
 
 	async function refresh(refresh_token: string) {
 		return refreshTokenGrant(config, refresh_token);
+	}
+
+	/**
+	 * Checks whether a session is still live by introspecting its refresh token
+	 * (RFC 7662). Unlike `refresh()`, this is a read-only status query, it never
+	 * consumes or rotates the refresh token, and never writes any cookie. Useful
+	 * for callers that need to know a session is still valid (e.g. for a
+	 * long-lived connection) without triggering a token refresh as a side effect.
+	 */
+	async function checkSessionLive(refresh_token: string) {
+		return tokenIntrospection(config, refresh_token, { token_type_hint: 'refresh_token' });
 	}
 
 	async function getLogoutUrl(visitedUrl: URL) {
@@ -422,12 +451,14 @@ export async function makeOIDC({
 		try {
 			const accessToken = accessTokenFromCookie;
 			const idToken = event.cookies.get(idTokenCookieName);
+			const refreshToken = event.cookies.get(refreshTokenCookieName);
 			if (!accessToken) {
 				error(400, 'No access token found');
 			}
 			event.locals.oidc = await validateTokens({
 				access_token: accessToken,
-				id_token: idToken
+				id_token: idToken,
+				refresh_token: refreshToken
 			});
 
 			return resolve(event);
@@ -475,6 +506,7 @@ export async function makeOIDC({
 	return {
 		handle,
 		fetchUserInfoFromIssuer,
-		getLogoutUrl
+		getLogoutUrl,
+		checkSessionLive
 	};
 }

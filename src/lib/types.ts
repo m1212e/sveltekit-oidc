@@ -45,8 +45,16 @@ export const parseOIDCFlowState = (value: unknown) => CompiledOIDCFlowState.Pars
 
 export type AccessTokenResponse = JWTPayload | IntrospectionResponse | undefined;
 export type IdTokenResponse = JWTPayload | IntrospectionResponse | UserInfoResponse | undefined;
+export type RefreshTokenResponse = JWTPayload | string | undefined;
 export type ValidationResponse = {
 	user: OIDCUser;
 	accessToken: AccessTokenResponse;
 	idToken: IdTokenResponse;
+	refreshToken: RefreshTokenResponse;
+	/**
+	 * Checks whether the session is still live by introspecting the refresh
+	 * token (RFC 7662) — read-only, never consumes/rotates it or writes a
+	 * cookie. `undefined` when there was no refresh token to check.
+	 */
+	checkSessionLive?: () => Promise<IntrospectionResponse>;
 };
