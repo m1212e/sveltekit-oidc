@@ -319,6 +319,11 @@ export async function makeOIDC({
 			accessToken: accessTokenValue,
 			idToken: idTokenValue,
 			refreshToken: refreshTokenValue,
+			raw: {
+				accessToken: access_token,
+				idToken: id_token,
+				refreshToken: refresh_token
+			},
 			checkSessionLive: refresh_token ? () => checkSessionLive(refresh_token) : undefined
 		};
 	}

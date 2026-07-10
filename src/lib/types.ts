@@ -52,6 +52,17 @@ export type ValidationResponse = {
 	idToken: IdTokenResponse;
 	refreshToken: RefreshTokenResponse;
 	/**
+	 * The unparsed token strings exactly as received from the request/cookie,
+	 * alongside the parsed fields above — for callers that need the native
+	 * value itself (e.g. to pass to `validateToken`/`checkSessionLive`/an
+	 * introspection call directly).
+	 */
+	raw: {
+		accessToken?: string;
+		idToken?: string;
+		refreshToken?: string;
+	};
+	/**
 	 * Checks whether the session is still live by introspecting the refresh
 	 * token (RFC 7662) — read-only, never consumes/rotates it or writes a
 	 * cookie. `undefined` when there was no refresh token to check.
