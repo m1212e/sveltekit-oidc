@@ -397,7 +397,9 @@ export async function makeOIDC({
 			httpOnly: true,
 			sameSite: 'lax',
 			// sameSite: 'strict',
-			secure: true,
+			// Browsers drop Secure cookies on plain http://<lan-ip> (only localhost is exempt), which
+			// breaks signing in from a phone against a dev server
+			secure: !development,
 			maxAge: tokens.expires_in ? tokens.expires_in : undefined
 		};
 
@@ -501,7 +503,7 @@ export async function makeOIDC({
 				sameSite: 'lax',
 				maxAge: 60 * 5,
 				path: '/',
-				secure: true,
+				secure: !development,
 				httpOnly: true
 			});
 
@@ -509,7 +511,7 @@ export async function makeOIDC({
 				sameSite: 'lax',
 				maxAge: 60 * 5,
 				path: '/',
-				secure: true,
+				secure: !development,
 				httpOnly: true
 			});
 
