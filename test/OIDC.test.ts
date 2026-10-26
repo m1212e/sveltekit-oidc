@@ -256,3 +256,169 @@ describe('options', () => {
 		});
 	});
 });
+
+describe('impersonation', () => {
+	const IMPERSONATION_COOKIES = [
+		'auth_oidc_impersonation_access_token',
+		'auth_oidc_impersonation_id_token'
+	];
+
+	/** A signed in session for `actor`, with the event of a request it makes. */
+	async function signedInEvent(actor: string) {
+		const jar = await signIn(actor);
+		const outcome = await run(fakeEvent('/app/admin', jar));
+		if (outcome.kind !== 'resolved') throw new Error(`expected a session, got ${outcome.kind}`);
+		return { jar, event: outcome.event };
+	}
+
+	async function sessionOf(jar: Jar) {
+		const outcome = await run(fakeEvent('/app/page', jar));
+		if (outcome.kind !== 'resolved') throw new Error(`expected a session, got ${outcome.kind}`);
+		return outcome.event.locals.oidc;
+	}
+
+	test('acts as the target from then on, bound to the signed in session', async () => {
+		const { jar, event } = await signedInEvent('admin');
+		const accessToken = await idp.signAccessToken({ sub: 'target', act: { sub: 'admin' } });
+
+		const started = await oidc.startImpersonation(event, { access_token: accessToken });
+		expect(started.user.sub).toBe('target');
+		expect(event.locals.oidc?.user.sub).toBe('target');
+		expect(jar.get('auth_oidc_impersonation_access_token')?.options).toMatchObject({
+			httpOnly: true,
+			sameSite: 'lax',
+			path: '/'
+		});
+		const maxAge = jar.get('auth_oidc_impersonation_access_token')?.options.maxAge as number;
+		expect(maxAge).toBeGreaterThan(590);
+		expect(maxAge).toBeLessThanOrEqual(600);
+		// The session itself is untouched
+		expect(jar.has('auth_oidc_refresh_token')).toBe(true);
+
+		const resumed = await sessionOf(jar);
+		expect(resumed?.user.sub).toBe('target');
+		expect(resumed?.actors).toEqual([{ sub: 'admin' }]);
+		expect(resumed?.impersonator?.user.sub).toBe('admin');
+		expect(resumed?.impersonator?.impersonator).toBeUndefined();
+	});
+
+	test('refuses tokens not delegated to the signed in user', async () => {
+		const { jar, event } = await signedInEvent('admin2');
+		const candidates = [
+			await idp.signAccessToken({ sub: 'target' }),
+			await idp.signAccessToken({ sub: 'target', act: { sub: 'someone-else' } }),
+			// The signed in user only as an earlier actor in the chain
+			await idp.signAccessToken({
+				sub: 'target',
+				act: { sub: 'someone-else', act: { sub: 'admin2' } }
+			}),
+			await idp.signAccessToken({ sub: 'target', act: { sub: 'admin2' } }, -120)
+		];
+		for (const accessToken of candidates) {
+			await expect(oidc.startImpersonation(event, { access_token: accessToken })).rejects.toThrow();
+		}
+		expect(event.locals.oidc?.user.sub).toBe('admin2');
+		for (const name of IMPERSONATION_COOKIES) expect(jar.has(name)).toBe(false);
+	});
+
+	test('refuses a token signed with any other key', async () => {
+		const { event } = await signedInEvent('admin3');
+		const other = await startTestOidcProvider();
+		try {
+			const forged = await other.signAccessToken({ sub: 'target', act: { sub: 'admin3' } });
+			await expect(oidc.startImpersonation(event, { access_token: forged })).rejects.toThrow();
+		} finally {
+			await other.close();
+		}
+	});
+
+	test('refuses without a cookie session, and while impersonating', async () => {
+		const accessToken = await idp.signAccessToken({ sub: 'target', act: { sub: 'admin4' } });
+		await expect(
+			oidc.startImpersonation(fakeEvent('/app'), { access_token: accessToken })
+		).rejects.toThrow(/signed in session/);
+
+		const sessionJar = await signIn('admin4');
+		const bearer = await run(
+			fakeEvent('/api', new Map(), {
+				authorization: `Bearer ${sessionJar.get('auth_oidc_access_token')?.value}`
+			})
+		);
+		if (bearer.kind !== 'resolved') throw new Error('expected the bearer token to be accepted');
+		await expect(
+			oidc.startImpersonation(bearer.event, { access_token: accessToken })
+		).rejects.toThrow(/signed in session/);
+
+		const { event } = await signedInEvent('admin4');
+		await oidc.startImpersonation(event, { access_token: accessToken });
+		await expect(oidc.startImpersonation(event, { access_token: accessToken })).rejects.toThrow(
+			/already impersonating/
+		);
+	});
+
+	test('ends when the impersonation token no longer belongs to the session', async () => {
+		const { jar, event } = await signedInEvent('admin5');
+		await oidc.startImpersonation(event, {
+			access_token: await idp.signAccessToken({ sub: 'target', act: { sub: 'admin5' } })
+		});
+
+		// Someone else's session cookies next to the impersonation cookie
+		const otherJar = await signIn('not-the-admin');
+		for (const name of IMPERSONATION_COOKIES) {
+			const cookie = jar.get(name);
+			if (cookie) otherJar.set(name, cookie);
+		}
+		expect((await sessionOf(otherJar))?.user.sub).toBe('not-the-admin');
+		for (const name of IMPERSONATION_COOKIES) expect(otherJar.has(name)).toBe(false);
+	});
+
+	test('ends when the impersonation token expires and is never refreshed', async () => {
+		const jar = await signIn('admin6');
+		jar.set('auth_oidc_impersonation_access_token', {
+			value: await idp.signAccessToken({ sub: 'target', act: { sub: 'admin6' } }, -120),
+			options: {}
+		});
+		expect((await sessionOf(jar))?.user.sub).toBe('admin6');
+		expect(jar.has('auth_oidc_impersonation_access_token')).toBe(false);
+	});
+
+	test('a delegated token is no session of its own, and no bearer token', async () => {
+		const accessToken = await idp.signAccessToken({ sub: 'target', act: { sub: 'admin7' } });
+
+		const jar: Jar = new Map([['auth_oidc_access_token', { value: accessToken, options: {} }]]);
+		expect(new URL(expectRedirect(await run(fakeEvent('/app/page', jar)))).origin).toBe(idp.issuer);
+
+		const bearer = await run(
+			fakeEvent('/api', new Map(), { authorization: `Bearer ${accessToken}` })
+		);
+		expect(bearer).toEqual({ kind: 'error', status: 401 });
+	});
+
+	test('stops on request, on sign out and on a new sign in', async () => {
+		const start = async (actor: string) => {
+			const { jar, event } = await signedInEvent(actor);
+			await oidc.startImpersonation(event, {
+				access_token: await idp.signAccessToken({ sub: 'target', act: { sub: actor } })
+			});
+			return { jar, event };
+		};
+
+		const stopped = await start('admin8');
+		oidc.stopImpersonation(stopped.event);
+		expect(stopped.event.locals.oidc?.user.sub).toBe('admin8');
+		for (const name of IMPERSONATION_COOKIES) expect(stopped.jar.has(name)).toBe(false);
+
+		const signedOut = await start('admin9');
+		expectRedirect(await run(fakeEvent('/auth/logout-callback', signedOut.jar)));
+		expect(signedOut.jar.size).toBe(0);
+
+		const { jar } = await start('admin10');
+		const login = new URL(
+			await oidc.redirectToSignin(fakeEvent('/app/page', jar)).catch((err) => err.location)
+		);
+		const callbackUrl = await idp.runAuthorizationFlow(login, 'someone-new');
+		expectRedirect(await run(fakeEvent(callbackUrl.toString(), jar)));
+		for (const name of IMPERSONATION_COOKIES) expect(jar.has(name)).toBe(false);
+		expect((await sessionOf(jar))?.user.sub).toBe('someone-new');
+	});
+});

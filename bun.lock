@@ -5,7 +5,7 @@
     "": {
       "name": "@m1212e/sveltekit-oidc",
       "dependencies": {
-        "@m1212e/oidc": "^0.1.2",
+        "@m1212e/oidc": "^0.2.0",
       },
       "devDependencies": {
         "@eslint/js": "^10.0.1",
@@ -82,7 +82,7 @@
 
     "@keyv/serialize": ["@keyv/serialize@1.1.1", "", {}, "sha512-dXn3FZhPv0US+7dtJsIi2R+c7qWYiReoEh5zUntWCf4oSpMNib8FDhSoed6m3QyZdx5hK7iLFkYk3rNxwt8vTA=="],
 
-    "@m1212e/oidc": ["@m1212e/oidc@0.1.2", "", { "dependencies": { "jose": "^6.2.13", "oauth4webapi": "^3.8.8", "openid-client": "^6.8.8", "typebox": "^1.4.3" } }, "sha512-WYYrXLNjWj+oYQvltNkEZNNDlkC5n6NxUdx4J8pmKyEEYl/Uk2i3xxSJzCy7q/0Q2BTKZNNQmgJmND6JQzc46w=="],
+    "@m1212e/oidc": ["@m1212e/oidc@0.2.0", "", { "dependencies": { "jose": "^6.2.13", "oauth4webapi": "^3.8.8", "openid-client": "^6.8.8", "typebox": "^1.4.3" } }, "sha512-hnE3ioRHB6txBD6Ijyb19Eplrz5+7gzkWZN3tT7I9kW/RRhSQgIjG9ABOBYzwULuPmhNixS1YX9C6ADQMR5uqA=="],
 
     "@oxc-project/types": ["@oxc-project/types@0.155.0", "", {}, "sha512-SeE8JPwW1xs1tHeNycjUtUBdhorRa8o4jlvjwk49R7/Z291i+4DQa7JJIgOm/TaYQZx+QrPQbVJ/9c8dMIZN8Q=="],
 

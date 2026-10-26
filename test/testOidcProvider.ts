@@ -1,6 +1,6 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { type CryptoKey, exportJWK, generateKeyPair } from 'jose';
+import { type CryptoKey, type JWTPayload, SignJWT, exportJWK, generateKeyPair } from 'jose';
 import { Provider } from 'oidc-provider';
 
 export const APP_ORIGIN = 'https://app.example.com';
@@ -14,6 +14,11 @@ export type TestOidcProvider = {
 	 * returns the URL the provider redirects back to.
 	 */
 	runAuthorizationFlow: (authorizationUrl: URL, accountId: string) => Promise<URL>;
+	/**
+	 * Signs an access token for this client with the provider's key, standing in for a token
+	 * exchange the provider does not implement. `expiresIn` is in seconds and may be negative.
+	 */
+	signAccessToken: (claims: JWTPayload, expiresIn?: number) => Promise<string>;
 };
 
 export async function startTestOidcProvider(): Promise<TestOidcProvider> {
@@ -126,9 +131,20 @@ export async function startTestOidcProvider(): Promise<TestOidcProvider> {
 		throw new Error('too many redirects while driving the authorization flow');
 	}
 
+	async function signAccessToken(claims: JWTPayload, expiresIn = 600) {
+		const now = Math.floor(Date.now() / 1000);
+		return new SignJWT({ azp: clientId, ...claims })
+			.setProtectedHeader({ alg: 'RS256', kid: 'test-key', typ: 'at+jwt' })
+			.setIssuer(issuer)
+			.setIssuedAt(now)
+			.setExpirationTime(now + expiresIn)
+			.sign(privateKey);
+	}
+
 	return {
 		issuer,
 		clientId,
+		signAccessToken,
 		close: () =>
 			new Promise<void>((resolve, reject) =>
 				server.close((err) => (err ? reject(err) : resolve()))

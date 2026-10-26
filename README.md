@@ -48,6 +48,27 @@ redirect(303, url, { external: [url.origin] });
 
 The provider sends the browser back to the logout callback route, which clears the session cookies and redirects to `logoutPath`.
 
+## Impersonation
+
+Let a signed in user act as someone else. Obtain tokens for the target through an RFC 8693 token exchange with the user's own token as actor (how you get the subject token is provider specific), then hand them to `startImpersonation`:
+
+```ts
+const own = event.locals.oidc!;
+const tokens = await OIDC.core.exchangeToken({
+	subjectToken, // e.g. from your provider's admin API
+	actorToken: own.tokens.accessToken
+});
+await OIDC.startImpersonation(event, tokens);
+```
+
+From then on `event.locals.oidc` describes the impersonated user, and `event.locals.oidc.impersonator` holds the signed in user's own session. `OIDC.stopImpersonation(event)` ends it.
+
+- The tokens must be delegated to the signed in user: the current actor in their `act` claim has to be them. Tokens without `act` (plain impersonation tokens) are refused, so an impersonation always leaves a trace in the token and in `locals.oidc.actors`.
+- They are kept in their own cookies, next to the session. Every request checks them against the session, so the impersonation ends when the session ends or changes hands, on sign out and on a new sign in.
+- They are never refreshed: the impersonation ends when the exchanged token expires.
+- A delegated token is never accepted as a session or bearer token of its own (unless you set the core `delegation` option).
+- Who may impersonate whom is up to your app. Check it before the exchange, and again on requests made while impersonating if it can change.
+
 ## Options
 
 All [options of `@m1212e/oidc`](https://github.com/m1212e/oidc#options) (`issuer`, `clientId`, `clientSecret`, `expectedAudience`, `development`, `logLevel`, `logger`, ...), plus:
@@ -69,7 +90,9 @@ All [options of `@m1212e/oidc`](https://github.com/m1212e/oidc#options) (`issuer
 
 ```ts
 OIDC.redirectToSignin(event); // start the sign in flow by hand, e.g. from a /login route
-OIDC.cookieNames; // { accessToken, idToken, refreshToken, codeVerifier, state }
+OIDC.startImpersonation(event, tokens); // see Impersonation
+OIDC.stopImpersonation(event);
+OIDC.cookieNames; // { accessToken, idToken, refreshToken, codeVerifier, state, impersonationAccessToken, impersonationIdToken }
 OIDC.core; // the underlying @m1212e/oidc instance
 ```
 

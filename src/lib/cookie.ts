@@ -6,6 +6,8 @@ export function makeCookieNames(prefix = 'auth_oidc_') {
 		state: `${prefix}state`,
 		accessToken: `${prefix}access_token`,
 		idToken: `${prefix}id_token`,
-		refreshToken: `${prefix}refresh_token`
+		refreshToken: `${prefix}refresh_token`,
+		impersonationAccessToken: `${prefix}impersonation_access_token`,
+		impersonationIdToken: `${prefix}impersonation_id_token`
 	};
 }

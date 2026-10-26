@@ -11,6 +11,7 @@ import {
 	type OidcCore,
 	type OidcCoreOptions,
 	type RefreshedTokenSet,
+	OidcDelegationError,
 	OidcError,
 	buildLogger,
 	createOidcCore,
@@ -18,7 +19,7 @@ import {
 	returnToFromUrl
 } from '@m1212e/oidc';
 import { type CookieNames, makeCookieNames } from './cookie.js';
-import type { OIDCSession, SessionTokens } from './types.js';
+import type { ImpersonationTokens, OIDCSession, SessionTokens } from './types.js';
 
 export type MakeOIDCOptions = OidcCoreOptions & {
 	/**
@@ -89,6 +90,19 @@ export type OIDC = {
 	 * visited URL afterwards.
 	 */
 	redirectToSignin: (event: RequestEvent) => Promise<never>;
+	/**
+	 * Starts impersonating the user `tokens` were issued for, from the next request on (and for the
+	 * rest of this one, through `event.locals.oidc`). The tokens have to be delegated to the signed
+	 * in user: their `act` claim must name them as the current actor. They are stored next to the
+	 * session, never in place of it, and checked against it on every request, so the impersonation
+	 * ends with the session, when the impersonation token expires (it is never refreshed) or with
+	 * `stopImpersonation`.
+	 */
+	startImpersonation: (event: RequestEvent, tokens: ImpersonationTokens) => Promise<OIDCSession>;
+	/**
+	 * Ends an impersonation. `event.locals.oidc` is the signed in user's own session again.
+	 */
+	stopImpersonation: (event: RequestEvent) => void;
 	cookieNames: CookieNames;
 	/**
 	 * The underlying `@m1212e/oidc` instance, for anything this wrapper does not cover.
@@ -115,6 +129,7 @@ export async function makeOIDC({
 	...coreOptions
 }: MakeOIDCOptions): Promise<OIDC> {
 	const core = await createOidcCore(coreOptions);
+	const issuer = core.configuration.serverMetadata().issuer;
 	const log = buildLogger(coreOptions.logger, coreOptions.logLevel);
 	// Browsers drop Secure cookies on plain http://<lan-ip> (only localhost is exempt), which
 	// breaks signing in from a phone against a dev server
@@ -133,6 +148,11 @@ export async function makeOIDC({
 	function deleteCookies(cookies: Cookies, names: string[]) {
 		for (const name of names) cookies.delete(name, { path: '/' });
 	}
+
+	const impersonationCookies = [
+		cookieNames.impersonationAccessToken,
+		cookieNames.impersonationIdToken
+	];
 
 	/**
 	 * Writes a token set to the cookies. A refresh does not always return a new refresh token, the
@@ -187,6 +207,7 @@ export async function makeOIDC({
 				user: result.user,
 				accessTokenClaims: result.accessTokenClaims,
 				idTokenClaims: result.idTokenClaims,
+				actors: result.actors,
 				tokens
 			};
 		} catch (err) {
@@ -195,6 +216,116 @@ export async function makeOIDC({
 			}
 			log.debug('[sveltekit-oidc] session could not be validated:', (err as Error).message);
 			return undefined;
+		}
+	}
+
+	/**
+	 * Validates tokens issued to impersonate someone. They are accepted only when they are delegated
+	 * to `impersonator`: a token without `act`, or naming anyone else as the current actor, could
+	 * otherwise be used to act as its subject without the impersonator's session.
+	 */
+	async function validateImpersonation(
+		tokens: SessionTokens,
+		impersonator: OIDCSession
+	): Promise<OIDCSession> {
+		const actor = impersonator.user.sub;
+		const result = await core.processTokens({
+			access_token: tokens.accessToken,
+			id_token: tokens.idToken,
+			delegation: ([current]) =>
+				current?.sub === actor && (current.iss === undefined || current.iss === issuer),
+			requireActor: true
+		});
+		if (result.actors[0]?.sub !== actor) {
+			throw new OidcDelegationError(
+				'access',
+				result.actors,
+				`an impersonation token has to name the signed in user (${actor}) as its actor`
+			);
+		}
+		return {
+			user: result.user,
+			accessTokenClaims: result.accessTokenClaims,
+			idTokenClaims: result.idTokenClaims,
+			actors: result.actors,
+			tokens: { accessToken: tokens.accessToken, idToken: tokens.idToken },
+			impersonator
+		};
+	}
+
+	/** Seconds until the earliest of the validated tokens expires. */
+	function secondsLeft(session: OIDCSession): number {
+		const expiries = [session.accessTokenClaims?.exp, session.idTokenClaims?.exp].filter(
+			(exp): exp is number => typeof exp === 'number'
+		);
+		if (!expiries.length) return 0;
+		return Math.max(0, Math.min(...expiries) - Math.floor(Date.now() / 1000));
+	}
+
+	/** The impersonation the cookies hold, if it still belongs to `own`. */
+	async function resumeImpersonation(
+		event: RequestEvent,
+		own: OIDCSession
+	): Promise<OIDCSession | undefined> {
+		const tokens: SessionTokens = {
+			accessToken: event.cookies.get(cookieNames.impersonationAccessToken),
+			idToken: event.cookies.get(cookieNames.impersonationIdToken)
+		};
+		if (!tokens.accessToken && !tokens.idToken) return undefined;
+		try {
+			return await validateImpersonation(tokens, own);
+		} catch (err) {
+			log.info('[sveltekit-oidc] impersonation ended:', (err as Error).message);
+			deleteCookies(event.cookies, impersonationCookies);
+			return undefined;
+		}
+	}
+
+	function hasSessionCookie(cookies: Cookies) {
+		return !!(
+			cookies.get(cookieNames.accessToken) ||
+			cookies.get(cookieNames.idToken) ||
+			cookies.get(cookieNames.refreshToken)
+		);
+	}
+
+	async function startImpersonation(
+		event: RequestEvent,
+		tokens: ImpersonationTokens
+	): Promise<OIDCSession> {
+		const own = event.locals.oidc;
+		// A bearer request has no cookie session the impersonation could be bound to
+		if (!own || !hasSessionCookie(event.cookies)) {
+			throw new OidcError('impersonation needs a signed in session');
+		}
+		if (own.impersonator) {
+			throw new OidcError('already impersonating someone, stop that first');
+		}
+		if (typeof tokens?.access_token !== 'string' || !tokens.access_token) {
+			throw new OidcError('impersonation needs the access token the token exchange issued');
+		}
+
+		const session = await validateImpersonation(
+			{ accessToken: tokens.access_token, idToken: tokens.id_token || undefined },
+			own
+		);
+		const maxAge = secondsLeft(session);
+		if (maxAge <= 0) throw new OidcError('the impersonation token carries no future expiry');
+
+		setCookie(event.cookies, cookieNames.impersonationAccessToken, tokens.access_token, maxAge);
+		if (tokens.id_token) {
+			setCookie(event.cookies, cookieNames.impersonationIdToken, tokens.id_token, maxAge);
+		} else {
+			deleteCookies(event.cookies, [cookieNames.impersonationIdToken]);
+		}
+		event.locals.oidc = session;
+		return session;
+	}
+
+	function stopImpersonation(event: RequestEvent) {
+		deleteCookies(event.cookies, impersonationCookies);
+		if (event.locals.oidc?.impersonator) {
+			event.locals.oidc = event.locals.oidc.impersonator;
 		}
 	}
 
@@ -216,7 +347,11 @@ export async function makeOIDC({
 		if (!codeVerifier) error(400, 'No code verifier cookie found.');
 		const expectedState = event.cookies.get(cookieNames.state);
 		if (!expectedState) error(400, 'No oidc state cookie found.');
-		deleteCookies(event.cookies, [cookieNames.codeVerifier, cookieNames.state]);
+		deleteCookies(event.cookies, [
+			cookieNames.codeVerifier,
+			cookieNames.state,
+			...impersonationCookies
+		]);
 
 		let returnTo: string;
 		try {
@@ -273,10 +408,13 @@ export async function makeOIDC({
 			idToken: event.cookies.get(cookieNames.idToken),
 			refreshToken: event.cookies.get(cookieNames.refreshToken)
 		};
-		const hasSessionCookie = !!(tokens.accessToken || tokens.idToken || tokens.refreshToken);
-
-		if (hasSessionCookie) {
-			event.locals.oidc = await validateSession(event, tokens);
+		if (tokens.accessToken || tokens.idToken || tokens.refreshToken) {
+			const own = await validateSession(event, tokens);
+			if (own) {
+				event.locals.oidc = (await resumeImpersonation(event, own)) ?? own;
+			} else {
+				deleteCookies(event.cookies, impersonationCookies);
+			}
 		} else if (allowBearerToken) {
 			const authHeader = event.request.headers.get('authorization');
 			if (authHeader?.toLowerCase().startsWith('bearer ')) {
@@ -287,6 +425,7 @@ export async function makeOIDC({
 						user: result.user,
 						accessTokenClaims: result.accessTokenClaims,
 						idTokenClaims: result.idTokenClaims,
+						actors: result.actors,
 						tokens: { accessToken }
 					};
 				} catch (err) {
@@ -307,6 +446,8 @@ export async function makeOIDC({
 		handle,
 		getLogoutUrl,
 		redirectToSignin,
+		startImpersonation,
+		stopImpersonation,
 		cookieNames,
 		core
 	};

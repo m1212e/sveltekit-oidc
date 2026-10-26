@@ -42,7 +42,7 @@
 		"@sveltejs/kit": "^3.0.0"
 	},
 	"dependencies": {
-		"@m1212e/oidc": "^0.1.2"
+		"@m1212e/oidc": "^0.2.0"
 	},
 	"devDependencies": {
 		"@eslint/js": "^10.0.1",
