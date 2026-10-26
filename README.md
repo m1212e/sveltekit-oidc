@@ -1,59 +1,90 @@
-# svletekit-oidc
+# sveltekit-oidc
 
-Implementing OIDC with Sveltekit never has been easier:
+OpenID Connect sign in for SvelteKit. A thin wrapper around [`@m1212e/oidc`](https://github.com/m1212e/oidc), which does the actual token handling. This package adds the SvelteKit glue: a `handle` hook, cookies and redirects.
 
-In your `hooks.server.ts`
+```sh
+npm i @m1212e/sveltekit-oidc
+```
+
+Requires SvelteKit 3 and Node 22.12+ (or Bun).
+
+## Setup
+
+In your `hooks.server.ts`:
 
 ```ts
+import { makeOIDC } from '@m1212e/sveltekit-oidc';
 import { sequence } from '@sveltejs/kit/hooks';
 
 export const OIDC = await makeOIDC({
-	oidcAuthority: PUBLIC_OIDC_AUTHORITY,
-	oidcClientId: PUBLIC_OIDC_CLIENT_ID,
-	secret: OIDC_CLIENT_SECRET,
+	issuer: PUBLIC_OIDC_AUTHORITY,
+	clientId: PUBLIC_OIDC_CLIENT_ID,
+	clientSecret: OIDC_CLIENT_SECRET, // omit for public clients
 	authenticatedRoutes: ['/app'],
-	async userLoggedInSuccessfully(user) {
-		upsertUserAtDatabase();
+	async userLoggedInSuccessfully({ user }) {
+		await upsertUserAtDatabase(user);
 	}
 });
 
-export const handle: Handle = sequence(OIDC.handle, otherHandler);
+export const handle = sequence(OIDC.handle, otherHandler);
 ```
 
-Now the user is available via the locals on your server.
+`OIDC.handle`:
 
-## Logging
+- puts the validated session on `event.locals.oidc` (`{ user, accessTokenClaims, idTokenClaims, tokens }`)
+- refreshes expired tokens and writes the new ones back to the cookies
+- sends visitors without a session on an `authenticatedRoutes` route to the provider, and back to the page they visited afterwards
+- serves the login and logout callback routes, no `+page` files needed
+- accepts an `Authorization: Bearer` header when there is no session cookie
 
-By default the library logs `warn` and `error` messages via `console`. You can control this with two options on `makeOIDC`:
+Register `<origin>/auth/login-callback` as redirect URI and `<origin>/auth/logout-callback` as post logout redirect URI at your provider.
 
-**`logLevel`** — tune the built-in console logger:
+## Sign out
 
 ```ts
-export const OIDC = await makeOIDC({
-	// ...
-	logLevel: 'debug' // 'silent' | 'error' | 'warn' | 'info' | 'debug'
-});
+const url = await OIDC.getLogoutUrl(event);
+redirect(303, url, { external: [url.origin] });
 ```
 
-**`logger`** — inject your own logger (any object with `debug / info / warn / error` methods). When set, `logLevel` is ignored.
+The provider sends the browser back to the logout callback route, which clears the session cookies and redirects to `logoutPath`.
+
+## Options
+
+All [options of `@m1212e/oidc`](https://github.com/m1212e/oidc#options) (`issuer`, `clientId`, `clientSecret`, `expectedAudience`, `development`, `logLevel`, `logger`, ...), plus:
+
+| Option                     | Default                                 |                                                                                         |
+| -------------------------- | --------------------------------------- | --------------------------------------------------------------------------------------- |
+| `authenticatedRoutes`      | required                                | path prefixes, or `(url: URL) => boolean`                                               |
+| `scope`                    | `"openid profile email offline_access"` | requested on sign in                                                                    |
+| `loginCallbackRoute`       | `"/auth/login-callback"`                |                                                                                         |
+| `logoutCallbackRoute`      | `"/auth/logout-callback"`               |                                                                                         |
+| `logoutPath`               | `"/"`                                   | where to go once signed out                                                             |
+| `cookiePrefix`             | `"auth_oidc_"`                          | the resulting names are on `OIDC.cookieNames`                                           |
+| `sessionMaxAge`            | 30 days                                 | seconds the token cookies live when there is a refresh token                            |
+| `allowBearerToken`         | `true`                                  |                                                                                         |
+| `userLoggedInSuccessfully` |                                         | called once after sign in, with the session                                             |
+| `development`              | `NODE_ENV === "development"`            | also drops the `Secure` flag from the cookies, so signing in works over plain `http://` |
+
+## Other functions
 
 ```ts
-// Pass the browser/Node console directly:
-export const OIDC = await makeOIDC({ ..., logger: console });
-
-// Or adapt pino:
-import pino from 'pino';
-const pinoLogger = pino();
-export const OIDC = await makeOIDC({ ..., logger: pinoLogger });
-
-// Or adapt winston:
-import { createLogger, transports } from 'winston';
-const winstonLogger = createLogger({ transports: [new transports.Console()] });
-export const OIDC = await makeOIDC({ ..., logger: winstonLogger });
+OIDC.redirectToSignin(event); // start the sign in flow by hand, e.g. from a /login route
+OIDC.cookieNames; // { accessToken, idToken, refreshToken, codeVerifier, state }
+OIDC.core; // the underlying @m1212e/oidc instance
 ```
 
-The `Logger` and `LogLevel` types are exported from the package for type-safe adapters:
+Everything `@m1212e/oidc` exports (error classes, types such as `OIDCUser`) is re-exported from this package.
 
-```ts
-import type { Logger } from '@m1212e/sveltekit-oidc';
-```
+## Migrating from 0.0.x
+
+- Options: `oidcAuthority` → `issuer`, `oidcClientId` → `clientId`, `oidcClientSecret` → `clientSecret`, `oidcScope` → `scope`.
+- `event.locals.oidc`: `accessToken` → `accessTokenClaims`, `idToken` → `idTokenClaims`, `raw` → `tokens`. `refreshToken` (the decoded refresh token) and `checkSessionLive` are gone.
+- `getLogoutUrl(url)` → `getLogoutUrl(event)`. It now sends the id token as `id_token_hint`.
+- `validateToken`, `validateTokens`, `isTokenExpired`, `refresh`, `fetchUserInfoFromIssuer`, `startSignin` and `resolveSignin` are gone from the returned object. Use `OIDC.core` instead.
+- The default scope now includes `offline_access`.
+- The token cookies now outlive the access token when there is a refresh token (see `sessionMaxAge`), so sessions are actually refreshed instead of starting over at the provider.
+- The `expires_in`, `scope` and `token_type` cookies are no longer written.
+
+## License
+
+Apache-2.0

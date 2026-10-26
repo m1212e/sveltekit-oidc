@@ -1,9 +1,9 @@
-import type { ValidationResponse } from './types.ts';
+import type { OIDCSession } from './types.js';
 
 declare global {
 	namespace App {
 		interface Locals {
-			oidc?: ValidationResponse;
+			oidc?: OIDCSession;
 		}
 	}
 }

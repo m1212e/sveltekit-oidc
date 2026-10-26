@@ -1,536 +1,313 @@
-import { type Handle, type RequestEvent, error, redirect } from '@sveltejs/kit';
-import { createRemoteJWKSet, decodeJwt, jwtVerify, type JWTPayload } from 'jose';
+import type { Handle } from '@sveltejs/kit/hooks';
 import {
-	type IntrospectionResponse,
-	type TokenEndpointResponse,
-	type TokenEndpointResponseHelpers,
-	allowInsecureRequests,
-	authorizationCodeGrant,
-	buildAuthorizationUrl,
-	buildEndSessionUrl,
-	calculatePKCECodeChallenge,
-	discovery,
-	fetchUserInfo,
-	randomPKCECodeVerifier,
-	randomState,
-	refreshTokenGrant,
-	skipSubjectCheck,
-	tokenIntrospection
-} from 'openid-client';
-import { makeCookieNames } from './cookie.js';
-import { type Logger, type LogLevel, buildLogger } from './logger.js';
+	type Cookies,
+	type RequestEvent,
+	error,
+	isHttpError,
+	isRedirect,
+	redirect
+} from '@sveltejs/kit';
 import {
-	type AccessTokenResponse,
-	type IdTokenResponse,
-	type OIDCFlowState,
-	type RefreshTokenResponse,
-	type ValidationResponse,
-	parseOIDCFlowState,
-	parseOIDCUser
-} from './types.js';
+	type OidcCore,
+	type OidcCoreOptions,
+	type RefreshedTokenSet,
+	OidcError,
+	buildLogger,
+	createOidcCore,
+	resolveDevelopment,
+	returnToFromUrl
+} from '@m1212e/oidc';
+import { type CookieNames, makeCookieNames } from './cookie.js';
+import type { OIDCSession, SessionTokens } from './types.js';
 
-// source: https://github.com/panva/jose/blob/2b42c5872b92a2c5662b26facd910b6d8e95f008/src/lib/jwt_claims_set.ts#L19-L31
-const checkAudiencePresence = ({
-	audOption: audOptionParam,
-	audPayload
-}: {
-	audPayload: string | string[] | undefined;
-	audOption: string[] | string;
-}) => {
-	const audOption = Array.isArray(audOptionParam) ? audOptionParam : [audOptionParam];
-	if (typeof audPayload === 'string') {
-		return audOption.includes(audPayload);
-	}
-
-	if (Array.isArray(audPayload)) {
-		// Each principal intended to process the JWT MUST
-		// identify itself with a value in the audience claim
-		return audOption.some(Set.prototype.has.bind(new Set(audPayload)));
-	}
-
-	return false;
+export type MakeOIDCOptions = OidcCoreOptions & {
+	/**
+	 * The scope requested on sign in.
+	 * @default "openid profile email offline_access"
+	 */
+	scope?: string;
+	/**
+	 * Routes that need a session. A visitor without one is sent to the provider to sign in.
+	 * Either a list of path prefixes or a function deciding per URL.
+	 */
+	authenticatedRoutes: string[] | ((url: URL) => boolean);
+	/**
+	 * Where the provider sends the browser back to after signing in. Served by `handle`, there
+	 * does not need to be a route at this path.
+	 * @default "/auth/login-callback"
+	 */
+	loginCallbackRoute?: string;
+	/**
+	 * Where the provider sends the browser back to after signing out. Served by `handle`, there
+	 * does not need to be a route at this path.
+	 * @default "/auth/logout-callback"
+	 */
+	logoutCallbackRoute?: string;
+	/**
+	 * The path to send the browser to once signed out, e.g. `/logout-successful`.
+	 * @default "/"
+	 */
+	logoutPath?: string;
+	/**
+	 * The prefix of the cookie names.
+	 * @default "auth_oidc_"
+	 */
+	cookiePrefix?: string;
+	/**
+	 * How long, in seconds, the token cookies are kept when the provider issued a refresh token.
+	 * The tokens themselves still expire on their own schedule and are refreshed as needed, this
+	 * only bounds how long a session can be resumed. Without a refresh token the cookies expire
+	 * with the access token.
+	 * @default 2592000 (30 days)
+	 */
+	sessionMaxAge?: number;
+	/**
+	 * Whether to accept a bearer token from the `Authorization` header when there is no session
+	 * cookie. Useful for API clients that cannot use cookies.
+	 * @default true
+	 */
+	allowBearerToken?: boolean;
+	/**
+	 * Called once after a user signed in. Useful for upserting users to a db.
+	 */
+	userLoggedInSuccessfully?: (session: OIDCSession) => Promise<void> | void;
 };
+
+export type OIDC = {
+	/**
+	 * Protects `authenticatedRoutes`, serves both callback routes and puts the validated session
+	 * on `event.locals.oidc`.
+	 */
+	handle: Handle;
+	/**
+	 * Builds the provider's logout URL. The provider sends the browser back to
+	 * `logoutCallbackRoute`, which clears the session cookies.
+	 */
+	getLogoutUrl: (event: Pick<RequestEvent, 'url' | 'cookies'>) => Promise<URL>;
+	/**
+	 * Starts the sign in flow and redirects to the provider. The user is sent back to the
+	 * visited URL afterwards.
+	 */
+	redirectToSignin: (event: RequestEvent) => Promise<never>;
+	cookieNames: CookieNames;
+	/**
+	 * The underlying `@m1212e/oidc` instance, for anything this wrapper does not cover.
+	 */
+	core: OidcCore;
+};
+
+const FLOW_COOKIE_MAX_AGE = 60 * 5;
+const DEFAULT_SESSION_MAX_AGE = 60 * 60 * 24 * 30;
 
 /**
  * Create an OIDC instance
  */
 export async function makeOIDC({
-	development = false,
-	oidcAuthority,
-	oidcClientId,
-	oidcClientSecret,
-	oidcScope,
-	logoutPath = '/',
-	cookiePrefix,
-	userLoggedInSuccessfully,
+	scope,
+	authenticatedRoutes,
 	loginCallbackRoute = '/auth/login-callback',
 	logoutCallbackRoute = '/auth/logout-callback',
-	authenticatedRoutes,
+	logoutPath = '/',
+	cookiePrefix,
+	sessionMaxAge = DEFAULT_SESSION_MAX_AGE,
 	allowBearerToken = true,
-	logger,
-	logLevel
-}: {
-	/**
-	 * If the server is running in development mode.
-	 * @default false
-	 */
-	development?: boolean;
-	/**
-	 * The URL of the OpenID Connect server
-	 */
-	oidcAuthority: string;
-	/**
-	 * The client ID of the OpenID client
-	 */
-	oidcClientId: string;
-	/**
-	 * The client secret of the OpenID client
-	 */
-	oidcClientSecret?: string;
-	/**
-	 * The scope of the requested token
-	 */
-	oidcScope?: string;
-	/**
-	 * The path to redirect to after logging out e.g. /logout-successful
-	 * Defaults to `/`
-	 */
-	logoutPath?: string;
-	/**
-	 * The prefix to use for the cookie names. Defaults to `auth_oidc_`
-	 */
-	cookiePrefix?: string;
-	/**
-	 * Callback for when a user logged in successfully. Useful for upserting users to a db
-	 */
-	userLoggedInSuccessfully?: (oidc: ValidationResponse) => Promise<void> | void;
-	/**
-	 * The route used for login flow.
-	 * Defaults to `/auth/login-callback`
-	 * There does not actually have a route +page.svelte file there, the handlers takes
-	 * care of all the routing
-	 */
-	loginCallbackRoute?: string;
-	/**
-	 * The route used for logout flow.
-	 * Defaults to `/auth/logout-callback`
-	 * There does not actually have a route +page.svelte file there, the handlers takes
-	 * care of all the routing
-	 */
-	logoutCallbackRoute?: string;
-	/**
-	 * Routes that are protected and should trigger a login if the user is not authenticated
-	 */
-	authenticatedRoutes: string[];
-	/**
-	 * Whether to accept a bearer token from the `Authorization` header when no access token
-	 * cookie is present. Useful for API clients that cannot use cookies.
-	 * @default true
-	 */
-	allowBearerToken?: boolean;
-	/**
-	 * Custom logger instance. Must implement `{ debug, info, warn, error }`.
-	 * Compatible with `console`, pino, winston, etc.
-	 * When provided, `logLevel` is ignored.
-	 */
-	logger?: Logger;
-	/**
-	 * Minimum log level for the built-in logger. Has no effect when `logger` is provided.
-	 * @default 'warn'
-	 */
-	logLevel?: LogLevel;
-}) {
-	const log = buildLogger(logger, logLevel);
+	userLoggedInSuccessfully,
+	...coreOptions
+}: MakeOIDCOptions): Promise<OIDC> {
+	const core = await createOidcCore(coreOptions);
+	const log = buildLogger(coreOptions.logger, coreOptions.logLevel);
+	// Browsers drop Secure cookies on plain http://<lan-ip> (only localhost is exempt), which
+	// breaks signing in from a phone against a dev server
+	const secure = !resolveDevelopment(coreOptions.development);
+	const cookieNames = makeCookieNames(cookiePrefix);
 
-	const execute = [];
-	if (development) {
-		execute.push(allowInsecureRequests);
-	}
-	const config = await discovery(
-		new URL(oidcAuthority),
-		oidcClientId,
-		{
-			client_secret: oidcClientSecret,
-			token_endpoint_auth_method: oidcClientSecret ? undefined : 'none'
-		},
-		undefined,
-		{
-			execute
-		}
-	);
+	const isAuthenticatedRoute =
+		typeof authenticatedRoutes === 'function'
+			? authenticatedRoutes
+			: (url: URL) => authenticatedRoutes.some((r) => url.pathname.startsWith(r));
 
-	const jwks_uri = config.serverMetadata().jwks_uri;
-	const jwks = jwks_uri ? createRemoteJWKSet(new URL(jwks_uri)) : undefined;
-
-	const {
-		accessTokenCookieName,
-		codeVerifierCookieName,
-		expiresInCookieName,
-		idTokenCookieName,
-		oidcStateCookieName,
-		refreshTokenCookieName,
-		scopeCookieName,
-		tokenTypeCookieName
-	} = makeCookieNames(cookiePrefix);
-
-	async function startSignin(visitedUrl: URL) {
-		const code_verifier = randomPKCECodeVerifier();
-		const code_challenge = await calculatePKCECodeChallenge(code_verifier);
-		const state: OIDCFlowState = {
-			visitedUrl: visitedUrl.toString(),
-			random: randomState()
-		};
-		const serialized_state = JSON.stringify(state);
-
-		const parameters: Record<string, string> = {
-			redirect_uri: `${visitedUrl.origin}${loginCallbackRoute}`,
-			scope: oidcScope ?? 'openid profile email',
-			code_challenge,
-			code_challenge_method: 'S256',
-			state: serialized_state
-		};
-
-		const redirect_uri = buildAuthorizationUrl(config, parameters);
-
-		return {
-			code_verifier,
-			redirect_uri,
-			state: serialized_state
-		};
+	function setCookie(cookies: Cookies, name: string, value: string, maxAge?: number) {
+		cookies.set(name, value, { path: '/', httpOnly: true, sameSite: 'lax', secure, maxAge });
 	}
 
-	async function resolveSignin(visitedUrl: URL, verifier: string, state: string) {
-		const parsedState = parseOIDCFlowState(JSON.parse(state));
-		const tokens = await authorizationCodeGrant(config, visitedUrl, {
-			pkceCodeVerifier: verifier,
-			expectedState: JSON.stringify(parsedState)
-		});
-		(parsedState as any).random = undefined;
-		const strippedState: Omit<OIDCFlowState, 'random'> = { ...parsedState };
-
-		return { tokens, state: strippedState };
+	function deleteCookies(cookies: Cookies, names: string[]) {
+		for (const name of names) cookies.delete(name, { path: '/' });
 	}
 
 	/**
-	 * Validates a token — any token, access/id/refresh/whatever — using the
-	 * same two network-agnostic-first strategy the regular flow relies on: a
-	 * local JWT check (works for Zitadel, Keycloak, etc.), falling back to the
-	 * introspection endpoint for providers with opaque tokens (e.g. Logto).
-	 * Makes no assumption about what kind of token it is. Returns the verified
-	 * claims, or `undefined` if neither strategy could confirm it's valid.
+	 * Writes a token set to the cookies. A refresh does not always return a new refresh token, the
+	 * current one then stays valid and is kept. A fresh sign in never inherits one.
 	 */
-	async function validateToken(
-		token: string
-	): Promise<JWTPayload | IntrospectionResponse | undefined> {
-		if (jwks) {
-			try {
-				const result = await jwtVerify(token, jwks, {
-					issuer: config.serverMetadata().issuer,
-					audience: oidcClientId
-				});
-				return result.payload;
-			} catch (error) {
-				log.debug('[OIDC] Token JWT verification failed:', (error as Error).message);
-			}
-		}
+	function storeTokens(
+		cookies: Cookies,
+		tokens: RefreshedTokenSet,
+		{ signin = false } = {}
+	): SessionTokens {
+		const refreshToken =
+			tokens.refresh_token ?? (signin ? undefined : cookies.get(cookieNames.refreshToken));
+		const maxAge = refreshToken ? sessionMaxAge : tokens.expiresIn();
 
-		try {
-			const result = await tokenIntrospection(config, token);
-			if (!result.active) {
-				throw new Error('Token is not active');
-			}
-			return result;
-		} catch (error) {
-			log.debug('[OIDC] Token introspection failed:', (error as Error).message);
-		}
-
-		return undefined;
-	}
-
-	/**
-	 * Checks whether a token is expired, by decoding it locally — no signature
-	 * verification, no network — and comparing its `exp` claim to now. Returns
-	 * true if the token isn't a decodable JWT, has no `exp` claim, or has
-	 * expired. jose has no ready-made "is this expired" check: `jwtVerify`
-	 * enforces `exp` but only as part of a full signature verification, and
-	 * `decodeJwt` (used here) is a plain, unverified decode with no exp check
-	 * of its own.
-	 */
-	function isTokenExpired(token: string): boolean {
-		try {
-			const { exp } = decodeJwt(token);
-			if (!exp) return true;
-			return exp * 1000 <= Date.now();
-		} catch (error) {
-			log.debug('[OIDC] Could not decode token to check expiry:', (error as Error).message);
-			return true;
-		}
-	}
-
-	async function validateTokens({
-		access_token,
-		id_token,
-		refresh_token
-	}: Pick<
-		TokenEndpointResponse,
-		'access_token' | 'id_token' | 'refresh_token'
-	>): Promise<ValidationResponse> {
-		let refreshTokenValue: RefreshTokenResponse = refresh_token;
-		if (refresh_token) {
-			try {
-				refreshTokenValue = decodeJwt(refresh_token);
-			} catch (error) {
-				log.debug(
-					'[OIDC] Refresh token is not a decodable JWT, exposing raw value:',
-					(error as Error).message
-				);
-			}
-		}
-
-		const [accessTokenValue, idTokenValue]: [AccessTokenResponse, IdTokenResponse] =
-			await Promise.all([
-				access_token ? validateToken(access_token) : undefined,
-				id_token ? validateToken(id_token) : undefined
-			]);
-
-		let finalIdTokenValue = idTokenValue;
-		if (access_token && ((!accessTokenValue && access_token) || (!finalIdTokenValue && id_token))) {
-			// We have no independently-verified subject to check the userinfo
-			// response against here — both tokens failed regular validation, so
-			// any `sub` we could decode would come from the same unverified
-			// token, adding no real protection over just skipping the check.
-			finalIdTokenValue = await fetchUserInfoFromIssuer(access_token, skipSubjectCheck);
-		}
-
-		if (
-			(accessTokenValue as any)?.sub &&
-			finalIdTokenValue?.sub &&
-			(accessTokenValue as any)?.sub !== finalIdTokenValue?.sub
-		) {
-			log.warn('[OIDC] Subject in access token and id token do not match');
-			throw new Error('Subject in access token and id token do not match');
-		}
-
-		return {
-			user: parseOIDCUser({
-				...(accessTokenValue || {}),
-				...(idTokenValue || {})
-			}),
-			accessToken: accessTokenValue,
-			idToken: idTokenValue,
-			refreshToken: refreshTokenValue,
-			raw: {
-				accessToken: access_token,
-				idToken: id_token,
-				refreshToken: refresh_token
-			},
-			checkSessionLive: refresh_token ? () => checkSessionLive(refresh_token) : undefined
-		};
-	}
-
-	/**
-	 * Exchanges a refresh token for a new token set via `refreshTokenGrant`.
-	 * On providers with refresh token rotation (e.g. Logto), this CONSUMES the
-	 * refresh token you pass in — the response's `refresh_token` is the only
-	 * one still valid afterwards. Callers MUST persist the new token set
-	 * (e.g. via `setTokenCookiesOnRequest`-equivalent cookie writes) somewhere
-	 * the browser will actually receive it, or the session becomes permanently
-	 * unrefreshable the next time this is called with the now-stale token.
-	 * Never call this from a context that can't write the result back to the
-	 * client (e.g. mid-connection on an already-open WebSocket) — use
-	 * `checkSessionLive`/`isTokenExpired`/`validateToken` instead for
-	 * read-only liveness checks that don't consume anything.
-	 */
-	async function refresh(refresh_token: string) {
-		return refreshTokenGrant(config, refresh_token);
-	}
-
-	/**
-	 * Checks whether a session is still live by introspecting its refresh token
-	 * (RFC 7662). Unlike `refresh()`, this is a read-only status query, it never
-	 * consumes or rotates the refresh token, and never writes any cookie. Useful
-	 * for callers that need to know a session is still valid (e.g. for a
-	 * long-lived connection) without triggering a token refresh as a side effect.
-	 */
-	async function checkSessionLive(refresh_token: string) {
-		return tokenIntrospection(config, refresh_token, { token_type_hint: 'refresh_token' });
-	}
-
-	async function getLogoutUrl(visitedUrl: URL) {
-		return buildEndSessionUrl(config, {
-			post_logout_redirect_uri: `${visitedUrl.origin}${logoutCallbackRoute}`
-		});
-	}
-
-	async function fetchUserInfoFromIssuer(
-		access_token: string,
-		expectedSubject: string | typeof skipSubjectCheck
-	) {
-		return fetchUserInfo(config, access_token, expectedSubject);
-	}
-
-	async function handleLoginRedirect(req: RequestEvent) {
-		const verifier = req.cookies.get(codeVerifierCookieName);
-		if (!verifier) error(400, 'No code verifier cookie found.');
-		const oidcState = req.cookies.get(oidcStateCookieName);
-		if (!oidcState) error(400, 'No oidc state cookie found.');
-
-		const { state, tokens } = await resolveSignin(req.url, verifier, oidcState);
-
-		setTokenCookiesOnRequest(req, tokens);
-
-		req.cookies.delete(codeVerifierCookieName, { path: '/' });
-		req.cookies.delete(oidcStateCookieName, { path: '/' });
-
-		const oidc = await validateTokens(tokens);
-		await userLoggedInSuccessfully?.(oidc);
-
-		redirect(302, state.visitedUrl);
-	}
-
-	function setTokenCookiesOnRequest(
-		req: RequestEvent,
-		tokens: TokenEndpointResponse & TokenEndpointResponseHelpers
-	) {
-		const cookieOptions: Parameters<typeof req.cookies.set>[2] = {
-			path: '/',
-			httpOnly: true,
-			sameSite: 'lax',
-			// sameSite: 'strict',
-			// Browsers drop Secure cookies on plain http://<lan-ip> (only localhost is exempt), which
-			// breaks signing in from a phone against a dev server
-			secure: !development,
-			maxAge: tokens.expires_in ? tokens.expires_in : undefined
-		};
-
-		req.cookies.set(accessTokenCookieName, tokens.access_token, cookieOptions);
-		if (tokens.refresh_token) {
-			req.cookies.set(refreshTokenCookieName, tokens.refresh_token, cookieOptions);
-		}
+		setCookie(cookies, cookieNames.accessToken, tokens.access_token, maxAge);
+		// A refresh does not always return a new id token. The old one would then be validated
+		// next to the new access token on every request, so it is dropped rather than kept
 		if (tokens.id_token) {
-			req.cookies.set(idTokenCookieName, tokens.id_token, cookieOptions);
+			setCookie(cookies, cookieNames.idToken, tokens.id_token, maxAge);
+		} else {
+			deleteCookies(cookies, [cookieNames.idToken]);
 		}
-		const expiresIn = tokens.expiresIn();
-		if (expiresIn) {
-			req.cookies.set(expiresInCookieName, expiresIn.toString(), cookieOptions);
+		if (refreshToken) {
+			setCookie(cookies, cookieNames.refreshToken, refreshToken, maxAge);
+		} else {
+			deleteCookies(cookies, [cookieNames.refreshToken]);
 		}
-		if (tokens.scope) {
-			req.cookies.set(scopeCookieName, tokens.scope, cookieOptions);
-		}
-		if (tokens.token_type) {
-			req.cookies.set(tokenTypeCookieName, tokens.token_type, cookieOptions);
+
+		return { accessToken: tokens.access_token, idToken: tokens.id_token, refreshToken };
+	}
+
+	/**
+	 * Validates the tokens, refreshing them if needed. Refreshed tokens are written back to the
+	 * cookies, as providers rotate refresh tokens and the old one stops working once used.
+	 */
+	async function validateSession(
+		event: RequestEvent,
+		tokens: SessionTokens
+	): Promise<OIDCSession | undefined> {
+		try {
+			const result = await core.processTokens({
+				access_token: tokens.accessToken,
+				id_token: tokens.idToken,
+				refresh_token: tokens.refreshToken
+			});
+
+			if (result.refreshed) {
+				tokens = storeTokens(event.cookies, result.refreshedTokens);
+			}
+
+			return {
+				user: result.user,
+				accessTokenClaims: result.accessTokenClaims,
+				idTokenClaims: result.idTokenClaims,
+				tokens
+			};
+		} catch (err) {
+			if (err instanceof OidcError && err.refreshedTokens) {
+				storeTokens(event.cookies, err.refreshedTokens);
+			}
+			log.debug('[sveltekit-oidc] session could not be validated:', (err as Error).message);
+			return undefined;
 		}
 	}
 
-	async function handleLogoutRedirect(req: RequestEvent) {
-		req.cookies.delete(codeVerifierCookieName, { path: '/' });
-		req.cookies.delete(oidcStateCookieName, { path: '/' });
-		req.cookies.delete(accessTokenCookieName, { path: '/' });
-		req.cookies.delete(refreshTokenCookieName, { path: '/' });
-		req.cookies.delete(idTokenCookieName, { path: '/' });
-		req.cookies.delete(expiresInCookieName, { path: '/' });
-		req.cookies.delete(scopeCookieName, { path: '/' });
-		req.cookies.delete(tokenTypeCookieName, { path: '/' });
+	async function redirectToSignin(event: RequestEvent): Promise<never> {
+		const { authorizationUrl, codeVerifier, state } = await core.startSignin({
+			redirectUri: `${event.url.origin}${loginCallbackRoute}`,
+			returnTo: returnToFromUrl(event.url),
+			scope
+		});
 
-		redirect(302, `${req.url.origin}/${logoutPath}`);
+		setCookie(event.cookies, cookieNames.codeVerifier, codeVerifier, FLOW_COOKIE_MAX_AGE);
+		setCookie(event.cookies, cookieNames.state, state, FLOW_COOKIE_MAX_AGE);
+
+		redirect(302, authorizationUrl, { external: [authorizationUrl.origin] });
+	}
+
+	async function handleLoginCallback(event: RequestEvent): Promise<never> {
+		const codeVerifier = event.cookies.get(cookieNames.codeVerifier);
+		if (!codeVerifier) error(400, 'No code verifier cookie found.');
+		const expectedState = event.cookies.get(cookieNames.state);
+		if (!expectedState) error(400, 'No oidc state cookie found.');
+		deleteCookies(event.cookies, [cookieNames.codeVerifier, cookieNames.state]);
+
+		let returnTo: string;
+		try {
+			const result = await core.resolveSignin({
+				callbackUrl: event.url,
+				codeVerifier,
+				expectedState
+			});
+			returnTo = result.returnTo;
+
+			const session = await validateSession(
+				event,
+				storeTokens(event.cookies, result.tokens, { signin: true })
+			);
+			if (!session) throw new Error('the tokens returned by the provider could not be validated');
+			await userLoggedInSuccessfully?.(session);
+		} catch (err) {
+			if (isRedirect(err) || isHttpError(err)) throw err;
+			log.warn('[sveltekit-oidc] sign in failed:', (err as Error).message);
+			deleteCookies(event.cookies, [
+				cookieNames.accessToken,
+				cookieNames.idToken,
+				cookieNames.refreshToken
+			]);
+			error(400, 'Sign in failed.');
+		}
+
+		redirect(302, returnTo);
+	}
+
+	function handleLogoutCallback(event: RequestEvent): never {
+		deleteCookies(event.cookies, Object.values(cookieNames));
+		const target = new URL(logoutPath, `${event.url.origin}/`);
+		redirect(302, target.pathname + target.search + target.hash);
+	}
+
+	async function getLogoutUrl(event: Pick<RequestEvent, 'url' | 'cookies'>) {
+		return core.getLogoutUrl({
+			postLogoutRedirectUri: `${event.url.origin}${logoutCallbackRoute}`,
+			idTokenHint: event.cookies.get(cookieNames.idToken)
+		});
 	}
 
 	const handle: Handle = async ({ event, resolve }) => {
 		if (event.url.pathname.startsWith(loginCallbackRoute)) {
-			await handleLoginRedirect(event);
+			await handleLoginCallback(event);
 		}
-
 		if (event.url.pathname.startsWith(logoutCallbackRoute)) {
-			await handleLogoutRedirect(event);
+			handleLogoutCallback(event);
 		}
 
-		const accessTokenFromCookie = event.cookies.get(accessTokenCookieName);
+		const tokens: SessionTokens = {
+			accessToken: event.cookies.get(cookieNames.accessToken),
+			idToken: event.cookies.get(cookieNames.idToken),
+			refreshToken: event.cookies.get(cookieNames.refreshToken)
+		};
+		const hasSessionCookie = !!(tokens.accessToken || tokens.idToken || tokens.refreshToken);
 
-		// Bearer token auth: used when no cookie is present (e.g. API clients)
-		if (allowBearerToken && !accessTokenFromCookie) {
+		if (hasSessionCookie) {
+			event.locals.oidc = await validateSession(event, tokens);
+		} else if (allowBearerToken) {
 			const authHeader = event.request.headers.get('authorization');
 			if (authHeader?.toLowerCase().startsWith('bearer ')) {
-				const bearerToken = authHeader.slice(7);
+				const accessToken = authHeader.slice(7).trim();
 				try {
-					event.locals.oidc = await validateTokens({
-						access_token: bearerToken,
-						id_token: undefined
-					});
-					return resolve(event);
+					const result = await core.processTokens({ access_token: accessToken });
+					event.locals.oidc = {
+						user: result.user,
+						accessTokenClaims: result.accessTokenClaims,
+						idTokenClaims: result.idTokenClaims,
+						tokens: { accessToken }
+					};
 				} catch (err) {
-					log.warn('[OIDC] Bearer token validation failed:', (err as Error).message);
+					log.warn('[sveltekit-oidc] bearer token validation failed:', (err as Error).message);
 					error(401, 'Invalid bearer token');
 				}
 			}
 		}
 
-		try {
-			const accessToken = accessTokenFromCookie;
-			const idToken = event.cookies.get(idTokenCookieName);
-			const refreshToken = event.cookies.get(refreshTokenCookieName);
-			if (!accessToken) {
-				error(400, 'No access token found');
-			}
-			event.locals.oidc = await validateTokens({
-				access_token: accessToken,
-				id_token: idToken,
-				refresh_token: refreshToken
-			});
-
-			return resolve(event);
-		} catch (error) {
-			const refreshToken = event.cookies.get(refreshTokenCookieName);
-			if (refreshToken) {
-				try {
-					const newTokenSet = await refresh(refreshToken);
-					setTokenCookiesOnRequest(event, newTokenSet);
-					event.locals.oidc = await validateTokens(newTokenSet);
-					return resolve(event);
-				} catch (err) {
-					log.warn('[OIDC] Error refreshing token:', (err as Error).message);
-				}
-			}
-
-			// if neither validation nor refresh worked, start login flow
-			// but only if a route is protected
-			if (!authenticatedRoutes.some((r) => event.url.pathname.startsWith(r))) {
-				return resolve(event);
-			}
-
-			const { state, code_verifier, redirect_uri } = await startSignin(event.url);
-
-			event.cookies.set(codeVerifierCookieName, code_verifier, {
-				sameSite: 'lax',
-				maxAge: 60 * 5,
-				path: '/',
-				secure: !development,
-				httpOnly: true
-			});
-
-			event.cookies.set(oidcStateCookieName, state, {
-				sameSite: 'lax',
-				maxAge: 60 * 5,
-				path: '/',
-				secure: !development,
-				httpOnly: true
-			});
-
-			redirect(302, redirect_uri.toString());
+		if (!event.locals.oidc && isAuthenticatedRoute(event.url)) {
+			await redirectToSignin(event);
 		}
+
+		return resolve(event);
 	};
 
 	return {
 		handle,
-		fetchUserInfoFromIssuer,
 		getLogoutUrl,
-		startSignin,
-		resolveSignin,
-		handleLoginRedirect,
-		handleLogoutRedirect,
-		checkSessionLive,
-		isTokenExpired,
-		validateToken,
-		validateTokens,
-		refresh
+		redirectToSignin,
+		cookieNames,
+		core
 	};
 }

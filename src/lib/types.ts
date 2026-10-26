@@ -1,71 +1,18 @@
-import type { JWTPayload } from 'jose';
-import type { IntrospectionResponse, UserInfoResponse } from 'openid-client';
-import { Type, type Static, type TSchema } from 'typebox';
-import { Compile } from 'typebox/schema';
-import { Value } from 'typebox/value';
+import type { ValidationResult } from '@m1212e/oidc';
 
-const nullable = <T extends TSchema>(t: T) => Type.Optional(Type.Union([Type.Null(), t]));
-
-const OIDCUserSchema = Type.Object({
-	sub: Type.String(),
-	// email: Type.String({ format: 'email' }),
-	email: nullable(Type.String()),
-	preferred_username: nullable(Type.String()),
-	family_name: nullable(Type.String()),
-	given_name: nullable(Type.String()),
-
-	locale: nullable(Type.String()),
-	phone: nullable(Type.String())
-});
-export type OIDCUser = Static<typeof OIDCUserSchema>;
-const CompiledOIDCUser = Compile(OIDCUserSchema);
-export const parseOIDCUser = (value: unknown) => {
-	const v = CompiledOIDCUser.Parse(value);
-	// we clean this from excess values to prevent sensitive info
-	// which might not be represented by the type schema
-	// to be leaked
-	// we want to make absolutety sure the type declaration matches the value exactly
-	const cleaned = Value.Clean(OIDCUserSchema, { ...v }) as typeof v;
-
-	if (cleaned.email) {
-		// normalize email to lowercase to prevent case sensitivity issues
-		cleaned.email = String(cleaned.email).toLowerCase();
-	}
-
-	return cleaned;
+export type SessionTokens = {
+	accessToken?: string;
+	idToken?: string;
+	refreshToken?: string;
 };
 
-const OIDCFlowStateSchema = Type.Object({
-	visitedUrl: Type.String(),
-	random: Type.String()
-});
-export type OIDCFlowState = Static<typeof OIDCFlowStateSchema>;
-const CompiledOIDCFlowState = Compile(OIDCFlowStateSchema);
-export const parseOIDCFlowState = (value: unknown) => CompiledOIDCFlowState.Parse(value);
-
-export type AccessTokenResponse = JWTPayload | IntrospectionResponse | undefined;
-export type IdTokenResponse = JWTPayload | IntrospectionResponse | UserInfoResponse | undefined;
-export type RefreshTokenResponse = JWTPayload | string | undefined;
-export type ValidationResponse = {
-	user: OIDCUser;
-	accessToken: AccessTokenResponse;
-	idToken: IdTokenResponse;
-	refreshToken: RefreshTokenResponse;
+/**
+ * The validated session put on `event.locals.oidc`.
+ */
+export type OIDCSession = ValidationResult & {
 	/**
-	 * The unparsed token strings exactly as received from the request/cookie,
-	 * alongside the parsed fields above — for callers that need the native
-	 * value itself (e.g. to pass to `validateToken`/`checkSessionLive`/an
-	 * introspection call directly).
+	 * The raw token strings the session was validated from. After a refresh these are the new
+	 * tokens, which have already been written back to the cookies.
 	 */
-	raw: {
-		accessToken?: string;
-		idToken?: string;
-		refreshToken?: string;
-	};
-	/**
-	 * Checks whether the session is still live by introspecting the refresh
-	 * token (RFC 7662) — read-only, never consumes/rotates it or writes a
-	 * cookie. `undefined` when there was no refresh token to check.
-	 */
-	checkSessionLive?: () => Promise<IntrospectionResponse>;
+	tokens: SessionTokens;
 };

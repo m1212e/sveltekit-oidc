@@ -7,6 +7,9 @@
 		"type": "git",
 		"url": "https://github.com/m1212e/sveltekit-oidc"
 	},
+	"engines": {
+		"node": ">=22.12.0"
+	},
 	"scripts": {
 		"dev": "vite dev",
 		"build": "vite build && npm run prepack_",
@@ -15,6 +18,7 @@
 		"prepack_": "svelte-kit sync && svelte-package && publint",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+		"test": "bun test",
 		"format": "prettier --write .",
 		"lint": "prettier --check . && eslint ."
 	},
@@ -23,48 +27,54 @@
 		"!dist/**/*.test.*",
 		"!dist/**/*.spec.*"
 	],
-	"sideEffects": [
-		"**/*.css"
-	],
+	"sideEffects": false,
 	"svelte": "./dist/index.js",
 	"types": "./dist/index.d.ts",
 	"type": "module",
 	"exports": {
 		".": {
 			"types": "./dist/index.d.ts",
-			"svelte": "./dist/index.js"
+			"svelte": "./dist/index.js",
+			"default": "./dist/index.js"
 		}
 	},
 	"peerDependencies": {
-		"svelte": "^5.0.0"
+		"@sveltejs/kit": "^3.0.0"
+	},
+	"dependencies": {
+		"@m1212e/oidc": "^0.1.2"
 	},
 	"devDependencies": {
-		"@eslint/compat": "^2.1.0",
 		"@eslint/js": "^10.0.1",
-		"@sveltejs/adapter-auto": "^7.0.1",
-		"@sveltejs/kit": "^2.60.1",
-		"@sveltejs/package": "^2.5.7",
-		"@sveltejs/vite-plugin-svelte": "^7.1.2",
-		"@types/node": "^25.9.1",
-		"eslint": "^10.4.0",
+		"@sveltejs/adapter-auto": "^8.0.0",
+		"@sveltejs/kit": "^3.1.0",
+		"@sveltejs/package": "^3.0.1",
+		"@sveltejs/vite-plugin-svelte": "^7.3.1",
+		"@types/bun": "^1.4.4",
+		"@types/node": "^26.6.5",
+		"@types/oidc-provider": "^9.12.1",
+		"eslint": "^10.13.0",
 		"eslint-config-prettier": "^10.1.8",
-		"eslint-plugin-svelte": "^3.17.1",
-		"globals": "^17.6.0",
-		"prettier": "^3.8.3",
-		"prettier-plugin-svelte": "^3.5.2",
-		"publint": "^0.3.21",
-		"svelte": "^5.55.9",
-		"svelte-check": "^4.4.8",
+		"eslint-plugin-svelte": "^3.23.1",
+		"globals": "^17.13.0",
+		"jose": "^6.2.13",
+		"lefthook": "^2.2.2",
+		"oidc-provider": "^9.13.0",
+		"prettier": "^3.9.10",
+		"prettier-plugin-svelte": "^4.1.1",
+		"publint": "^0.3.25",
+		"svelte": "^5.57.2",
+		"svelte-check": "^4.7.7",
 		"typescript": "^6.0.3",
-		"typescript-eslint": "^8.59.4",
-		"vite": "^8.0.13"
+		"typescript-eslint": "^8.72.0",
+		"vite": "^8.3.5"
 	},
 	"keywords": [
-		"svelte"
-	],
-	"dependencies": {
-		"jose": "^6.2.3",
-		"openid-client": "^6.8.4",
-		"typebox": "^1.1.38"
-	}
+		"svelte",
+		"sveltekit",
+		"oidc",
+		"openid-connect",
+		"oauth2",
+		"authentication"
+	]
 }
