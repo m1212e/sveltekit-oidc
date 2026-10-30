@@ -69,9 +69,13 @@ export type MakeOIDCOptions = OidcCoreOptions & {
 	 */
 	allowBearerToken?: boolean;
 	/**
-	 * Called once after a user signed in. Useful for upserting users to a db.
+	 * Called once after a user signed in. Useful for upserting users to a db. `returnTo` is the
+	 * same-site path the callback is about to redirect to, so a redirect thrown here can carry it on.
 	 */
-	userLoggedInSuccessfully?: (session: OIDCSession) => Promise<void> | void;
+	userLoggedInSuccessfully?: (
+		session: OIDCSession,
+		signin: { returnTo: string }
+	) => Promise<void> | void;
 };
 
 export type OIDC = {
@@ -367,7 +371,7 @@ export async function makeOIDC({
 				storeTokens(event.cookies, result.tokens, { signin: true })
 			);
 			if (!session) throw new Error('the tokens returned by the provider could not be validated');
-			await userLoggedInSuccessfully?.(session);
+			await userLoggedInSuccessfully?.(session, { returnTo });
 		} catch (err) {
 			if (isRedirect(err) || isHttpError(err)) throw err;
 			log.warn('[sveltekit-oidc] sign in failed:', (err as Error).message);

@@ -73,18 +73,18 @@ From then on `event.locals.oidc` describes the impersonated user, and `event.loc
 
 All [options of `@m1212e/oidc`](https://github.com/m1212e/oidc#options) (`issuer`, `clientId`, `clientSecret`, `expectedAudience`, `development`, `logLevel`, `logger`, ...), plus:
 
-| Option                     | Default                                 |                                                                                         |
-| -------------------------- | --------------------------------------- | --------------------------------------------------------------------------------------- |
-| `authenticatedRoutes`      | required                                | path prefixes, or `(url: URL) => boolean`                                               |
-| `scope`                    | `"openid profile email offline_access"` | requested on sign in                                                                    |
-| `loginCallbackRoute`       | `"/auth/login-callback"`                |                                                                                         |
-| `logoutCallbackRoute`      | `"/auth/logout-callback"`               |                                                                                         |
-| `logoutPath`               | `"/"`                                   | where to go once signed out                                                             |
-| `cookiePrefix`             | `"auth_oidc_"`                          | the resulting names are on `OIDC.cookieNames`                                           |
-| `sessionMaxAge`            | 30 days                                 | seconds the token cookies live when there is a refresh token                            |
-| `allowBearerToken`         | `true`                                  |                                                                                         |
-| `userLoggedInSuccessfully` |                                         | called once after sign in, with the session                                             |
-| `development`              | `NODE_ENV === "development"`            | also drops the `Secure` flag from the cookies, so signing in works over plain `http://` |
+| Option                     | Default                                 |                                                                                          |
+| -------------------------- | --------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `authenticatedRoutes`      | required                                | path prefixes, or `(url: URL) => boolean`                                                |
+| `scope`                    | `"openid profile email offline_access"` | requested on sign in                                                                     |
+| `loginCallbackRoute`       | `"/auth/login-callback"`                |                                                                                          |
+| `logoutCallbackRoute`      | `"/auth/logout-callback"`               |                                                                                          |
+| `logoutPath`               | `"/"`                                   | where to go once signed out                                                              |
+| `cookiePrefix`             | `"auth_oidc_"`                          | the resulting names are on `OIDC.cookieNames`                                            |
+| `sessionMaxAge`            | 30 days                                 | seconds the token cookies live when there is a refresh token                             |
+| `allowBearerToken`         | `true`                                  |                                                                                          |
+| `userLoggedInSuccessfully` |                                         | called once after sign in, with the session and `{ returnTo }`, the path it redirects to |
+| `development`              | `NODE_ENV === "development"`            | also drops the `Secure` flag from the cookies, so signing in works over plain `http://`  |
 
 ## Other functions
 
