@@ -56,9 +56,11 @@ export type MakeOIDCOptions = OidcCoreOptions & {
 	cookiePrefix?: string;
 	/**
 	 * How long, in seconds, the token cookies are kept when the provider issued a refresh token.
-	 * The tokens themselves still expire on their own schedule and are refreshed as needed, this
-	 * only bounds how long a session can be resumed. Without a refresh token the cookies expire
-	 * with the access token.
+	 * The tokens themselves still expire on their own schedule and are refreshed as needed, and
+	 * every refresh renews the cookies for this long again: it is how long a session may stay
+	 * idle before it cannot be resumed, not an absolute lifetime. The provider's refresh token
+	 * lifetime bounds the session as a whole. Without a refresh token the cookies expire with the
+	 * access token.
 	 * @default 2592000 (30 days)
 	 */
 	sessionMaxAge?: number;
